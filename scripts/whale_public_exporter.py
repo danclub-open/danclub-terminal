@@ -346,7 +346,13 @@ def export_whales(db_path: Path, *, max_flagships: int = 40) -> dict[str, Any]:
                 coin = str(r.get("coin") or "")
                 usd = _num(r.get("signed_ntl_usd"), 2)
                 szi = _num(r.get("szi"), 8)
-                mpx = _num(r.get("mark_px"), 6)
+                try:
+                    mpx_raw = float(r.get("mark_px")) if r.get("mark_px") is not None else None
+                except (TypeError, ValueError):
+                    mpx_raw = None
+                if mpx_raw is not None and not math.isfinite(mpx_raw):
+                    mpx_raw = None
+                mpx = _num(mpx_raw, 6) if mpx_raw is not None else None
                 if not eid:
                     continue
                 ent = entities.setdefault(
@@ -365,8 +371,8 @@ def export_whales(db_path: Path, *, max_flagships: int = 40) -> dict[str, Any]:
                     ent["cur_szi_complete"] = False
                     if not coin or usd is None:
                         continue
-                if mpx is not None and mpx > 0:
-                    latest_coin_px[coin] = mpx
+                if mpx_raw is not None and mpx_raw > 0:
+                    latest_coin_px[coin] = mpx_raw
                 ent["total_notional"] += abs(usd)
                 ent["net_usd"] += usd
                 if szi is not None:
@@ -398,6 +404,8 @@ def export_whales(db_path: Path, *, max_flagships: int = 40) -> dict[str, Any]:
                 sel_wpnl = "o.hl_week_pnl" if "hl_week_pnl" in o_cols else "NULL"
                 sel_pos = "o.hl_positions_json" if "hl_positions_json" in o_cols else "'[]'"
                 sel_hip3 = "o.hl_hip3_positions_json" if "hl_hip3_positions_json" in o_cols else "'[]'"
+                sel_aster = "o.aster_positions_json" if "aster_positions_json" in o_cols else "'[]'"
+                sel_lighter = "o.lighter_positions_json" if "lighter_positions_json" in o_cols else "'[]'"
 
                 addr_rows = _safe_query(
                     conn,
@@ -411,7 +419,9 @@ def export_whales(db_path: Path, *, max_flagships: int = 40) -> dict[str, Any]:
                            {sel_wpnl} AS hl_week_pnl,
                            o.hl_account_value AS hl_account_value,
                            {sel_pos} AS hl_positions_json,
-                           {sel_hip3} AS hl_hip3_positions_json
+                           {sel_hip3} AS hl_hip3_positions_json,
+                           {sel_aster} AS aster_positions_json,
+                           {sel_lighter} AS lighter_positions_json
                     FROM address_registry a
                     LEFT JOIN onchain_profiles o ON o.identifier = a.identifier
                     WHERE a.entity_cluster_id IN ({ph})
@@ -489,9 +499,15 @@ def export_whales(db_path: Path, *, max_flagships: int = 40) -> dict[str, Any]:
                             mm["val_cov"] += 1
                             mm["account_value"] += float(r["hl_account_value"])
 
-                        # Merge detailed onchain entry_px / liq_px / upnl / lev with strict full-coverage checks!
+                        # Merge detailed onchain entry_px / liq_px / upnl / lev across ALL venues with strict qty reconciliation!
                         ep_map = pos_detail_by_eid.setdefault(eid, {})
-                        for col in ("hl_positions_json", "hl_hip3_positions_json"):
+                        venue_cols = (
+                            ("hl_positions_json", "HL"),
+                            ("hl_hip3_positions_json", "HIP3"),
+                            ("aster_positions_json", "Aster"),
+                            ("lighter_positions_json", "Lighter"),
+                        )
+                        for col, venue_tag in venue_cols:
                             try:
                                 plist = json.loads(r.get(col) or "[]")
                             except (TypeError, json.JSONDecodeError):
@@ -510,6 +526,8 @@ def export_whales(db_path: Path, *, max_flagships: int = 40) -> dict[str, Any]:
                                     (cn, sd),
                                     {
                                         "legs": 0,
+                                        "szi_sum": 0.0,
+                                        "venues": set(),
                                         "entry_qty_legs": 0,
                                         "entry_qty_sum": 0.0,
                                         "entry_cost_sum": 0.0,
@@ -522,12 +540,20 @@ def export_whales(db_path: Path, *, max_flagships: int = 40) -> dict[str, Any]:
                                     },
                                 )
                                 cur["legs"] += 1
-                                ep = _num(pp.get("entry_px"), 6)
+                                cur["venues"].add(venue_tag)
+                                try:
+                                    ep_raw = float(pp.get("entry_px") or 0.0)
+                                except (TypeError, ValueError):
+                                    ep_raw = 0.0
+                                if not math.isfinite(ep_raw):
+                                    ep_raw = 0.0
                                 szi_abs = abs(float(pp.get("szi") or 0.0))
-                                if ep is not None and ep > 0 and szi_abs > 0:
+                                if szi_abs > 0:
+                                    cur["szi_sum"] += szi_abs
+                                if ep_raw > 0 and szi_abs > 0:
                                     cur["entry_qty_legs"] += 1
                                     cur["entry_qty_sum"] += szi_abs
-                                    cur["entry_cost_sum"] += ep * szi_abs
+                                    cur["entry_cost_sum"] += ep_raw * szi_abs
                                 up = _num(pp.get("upnl"), 2)
                                 if up is not None:
                                     cur["upnl_legs"] += 1
@@ -658,24 +684,54 @@ def export_whales(db_path: Path, *, max_flagships: int = 40) -> dict[str, Any]:
                     positions = sorted(ent["all_positions"], key=lambda p: p["usd"], reverse=True)
                     for pos in positions:
                         det = ep_map.get((pos["coin"], pos["side"]))
-                        if det and det["legs"] > 0 and full_cluster_prof:
-                            # Strict 100% cluster + leg qty coverage for entry_px & upnl; never mix legs for liq/lev!
+                        opp_side = "SHORT" if pos["side"] == "LONG" else "LONG"
+                        has_opp_leg = ep_map.get((pos["coin"], opp_side)) is not None
+                        live_szi_abs = abs(float(ent["cur_szi"].get(pos["coin"], 0.0)))
+                        prof_szi_abs = float(det["szi_sum"]) if det else 0.0
+                        # Strict <=0.1% exact token-quantity reconciliation & no opposing-side hedge leg!
+                        # Any newly opened/closed leg (>0.1% qty delta) fails closed rather than extrapolating stale cost.
+                        qty_reconciled = (
+                            not has_opp_leg
+                            and live_szi_abs > 0
+                            and prof_szi_abs > 0
+                            and (abs(prof_szi_abs - live_szi_abs) / live_szi_abs) <= 0.001
+                        )
+                        if det and det["legs"] > 0 and full_cluster_prof and qty_reconciled:
+                            venues = sorted(det["venues"])
+                            single_venue = len(venues) == 1
                             if det["entry_qty_legs"] == det["legs"] and det["entry_qty_sum"] > 0:
-                                entry_px = _num(det["entry_cost_sum"] / det["entry_qty_sum"], 4)
+                                entry_px_raw = det["entry_cost_sum"] / det["entry_qty_sum"]
+                                entry_px = _num(entry_px_raw, 6 if entry_px_raw < 1.0 else 4)
                             else:
+                                entry_px_raw = None
                                 entry_px = None
                             pos["entry_px"] = entry_px
-                            pos["upnl"] = _num(det["upnl_sum"], 0) if det["upnl_legs"] == det["legs"] else None
-                            pos["liq_px"] = _num(det["tight_liq"], 4) if det["tight_liq"] else None
-                            if det["tight_liq"]:
-                                pos["lev"] = _num(det["tight_lev"], 1) if det["tight_lev"] else None
-                            elif det["legs"] == 1:
-                                pos["lev"] = _num(det["single_lev"], 1) if det["single_lev"] else None
+                            # Full-precision live mark-to-market uPnL before display rounding (prevents low-price meme rounding loss!)
+                            mpx_raw = latest_coin_px.get(pos["coin"]) or pos.get("mark_px")
+                            if entry_px_raw is not None and mpx_raw is not None and float(mpx_raw) > 0:
+                                diff_px = (float(mpx_raw) - entry_px_raw) if pos["side"] == "LONG" else (entry_px_raw - float(mpx_raw))
+                                pos["upnl"] = _num(diff_px * live_szi_abs, 0)
+                            elif det["upnl_legs"] == det["legs"]:
+                                pos["upnl"] = _num(det["upnl_sum"], 0)
                             else:
+                                pos["upnl"] = None
+                            # Never display single-venue liq_px / lev as if it governed a cross-venue sum
+                            if single_venue:
+                                pos["liq_px"] = _num(det["tight_liq"], 6 if (det["tight_liq"] and det["tight_liq"] < 1.0) else 4) if det["tight_liq"] else None
+                                if det["tight_liq"]:
+                                    pos["lev"] = _num(det["tight_lev"], 1) if det["tight_lev"] else None
+                                elif det["legs"] == 1:
+                                    pos["lev"] = _num(det["single_lev"], 1) if det["single_lev"] else None
+                                else:
+                                    pos["lev"] = None
+                                ltypes = det["lev_types"]
+                                pos["lev_type"] = next(iter(ltypes)) if len(ltypes) == 1 else ("mixed" if len(ltypes) > 1 else "")
+                            else:
+                                pos["liq_px"] = None
                                 pos["lev"] = None
-                            ltypes = det["lev_types"]
-                            pos["lev_type"] = next(iter(ltypes)) if len(ltypes) == 1 else ("mixed" if len(ltypes) > 1 else "")
+                                pos["lev_type"] = ""
                             pos["legs"] = det["legs"]
+                            pos["venues"] = venues
                         else:
                             pos["entry_px"] = None
                             pos["liq_px"] = None
@@ -683,6 +739,7 @@ def export_whales(db_path: Path, *, max_flagships: int = 40) -> dict[str, Any]:
                             pos["lev"] = None
                             pos["lev_type"] = ""
                             pos["legs"] = 0
+                            pos["venues"] = []
                     primary = positions[0]
                     ship_code, ship_label = _ship_class(ent["total_notional"])
 

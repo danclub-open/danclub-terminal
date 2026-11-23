@@ -245,8 +245,42 @@ def _norm_title_key(text: str) -> str:
     return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", str(text or "").lower())[:32]
 
 
+_MACRO_SOURCES = frozenset({
+    "firstsquawk",
+    "financialjuice",
+    "reuters",
+    "bloomberg",
+    "wsj",
+    "cnbc",
+    "zerohedge",
+    "deitaone",
+    "walter bloomberg",
+    "fxhedge",
+})
+_CRYPTO_EXPLICIT_RE = re.compile(
+    r"(?:\b(?:BTC|ETH|SOL|BNB|XRP|HYPE|DOGE|USDT|USDC|RLUSD|BITCOIN|ETHEREUM|SOLANA|CRYPTO|DEFI|NFT|"
+    r"BINANCE|COINBASE|OKX|BYBIT|BITGET|UPBIT|HYPERLIQUID|TETHER|CIRCLE|MICROSTRATEGY|MSTR|STABLECOIN)\b|"
+    r"比特币|以太坊|加密|币圈|币安|稳定币|永续合约|链上|交易所|空投)",
+    re.IGNORECASE,
+)
+_MACRO_KEYWORD_RE = re.compile(
+    r"(?:美股|美联储|央行|降息|加息|通胀|非农|关税|国债|英伟达|特斯拉|纳指|标普|黄金|白银|原油|炼油|油管|伊朗|俄乌|白宫|"
+    r"\b(?:FED|FOMC|POWELL|CPI|PCE|GDP|PAYROLLS?|TREASURY|YIELD|TARIFFS?|SANCTIONS?|OPEC|BRENT|WTI|"
+    r"OIL|PIPELINE|REFINERY|GOLD|SILVER|NASDAQ|S&P|DOW|NVIDIA|NVDA|TESLA|TSLA|APPLE|AAPL|MSFT|GOOGL|"
+    r"META|AMD|TSMC|SEMICONDUCTOR|MINISTER|SECRETARY OF STATE|SENATOR|CONGRESS|PARLIAMENT|ECB|BOJ|BOE|"
+    r"UKRAINE|RUSSIA|LIBYA|ISRAEL|IRAN|SWITZERLAND|CHINA FOREIGN)\b)",
+    re.IGNORECASE,
+)
+_INTEL_SECURITY_RE = re.compile(
+    r"(?:漏洞|被盗|黑客|攻击|抽走|证监会|破产|清盘|暂停提现|挤兑|"
+    r"\b(?:HACK|HACKED|EXPLOIT|DRAINED|BANKRUPTCY|INSOLVENCY|SEIZED|INDICTED)\b)",
+    re.IGNORECASE,
+)
+
+
 def _classify_eqn_item(channels: list[str], text: str, src_name: str) -> tuple[str, str]:
     chs = set(channels)
+    src_low = (src_name or "").strip().lower()
     if "earn" in chs or ("alpha" in chs and re.search(r"(?:空投|积分|认购|奖励|Yield|APR|年化|理财|Simple\s*Earn|瓜分)", text, re.IGNORECASE)):
         return "EARN", "理财·羊毛"
     if chs & {"binance", "korea", "tier2", "tier3", "alpha"}:
@@ -255,11 +289,76 @@ def _classify_eqn_item(channels: list[str], text: str, src_name: str) -> tuple[s
         return "MACRO", "美股·宏观"
     if chs & {"oi", "pricechange"}:
         return "MOVES", "异动·OI"
-    if re.search(r"(?:漏洞|被盗|黑客|攻击|抽走|SEC|证监会|破产|冻结)", text, re.IGNORECASE):
+    # Case-sensitive word-boundary \bSEC\b so "Secretary" NEVER triggers INTEL!
+    if _INTEL_SECURITY_RE.search(text) or re.search(r"\bSEC\b", text):
         return "INTEL", "深度预警"
-    if re.search(r"(?:美股|美联储|CPI|非农|关税|英伟达|NVIDIA|特斯拉|纳指|标普|黄金|原油|伊朗)", text, re.IGNORECASE):
+    if src_low in _MACRO_SOURCES and not _CRYPTO_EXPLICIT_RE.search(text):
+        return "MACRO", "美股·宏观"
+    if _MACRO_KEYWORD_RE.search(text) and not _CRYPTO_EXPLICIT_RE.search(text):
         return "MACRO", "美股·宏观"
     return "CRYPTO", "加密快讯"
+
+
+def _split_promo_title_summary(clean_head: str, src_name: str) -> tuple[str, str]:
+    """Split long promo notices at natural sentence punctuation instead of mid-word."""
+    if len(clean_head) <= 72:
+        return clean_head, f"来源：{src_name}（点击查看原文规则）"
+    for m in re.finditer(r"(?:[！。！？]|[!?](?:\s|$))", clean_head):
+        pos = m.end()
+        if 16 <= pos <= 95:
+            t = clean_head[:pos].strip()
+            s = clean_head[pos : pos + 160].strip()
+            return t, s or f"来源：{src_name}（点击查看原文规则）"
+    cut = max(clean_head.rfind("，", 20, 88), clean_head.rfind(", ", 20, 88), clean_head.rfind(" ", 30, 88))
+    if cut >= 24:
+        return clean_head[:cut].strip(), clean_head[cut:].lstrip("，, ").strip()[:160]
+    return clean_head[:84].strip(), clean_head[84:240].strip() or f"来源：{src_name}（点击查看原文规则）"
+
+
+def _norm_promo_url(url: str) -> str:
+    """Normalize promo URL while preserving campaign-identifying query params (stripping only tracking params)."""
+    raw = str(url or "").strip()
+    if not raw:
+        return ""
+    try:
+        from urllib.parse import parse_qsl, urlencode
+        p = urlparse(raw)
+        if p.scheme in ("http", "https") and p.netloc:
+            drop_keys = {"ref", "from", "spm", "source", "channel", "fbclid", "gclid"}
+            kept = sorted(
+                (k, v)
+                for k, v in parse_qsl(p.query, keep_blank_values=False)
+                if not k.lower().startswith("utm_") and k.lower() not in drop_keys
+            )
+            q = f"?{urlencode(kept)}" if kept else ""
+            return f"{p.netloc.lower()}{p.path.rstrip('/')}{q}"
+    except ValueError:
+        pass
+    return ""
+
+
+def _promo_semantic_key(exchange: str, title: str, summary: str, earn_cat: str = "") -> str:
+    """High-precision cross-source duplicate fingerprint: requires >=2 uppercase asset tickers + reward pool amount."""
+    ex = (exchange or "").strip().lower()
+    cat = (earn_cat or "").strip().upper()
+    txt = f"{title} {summary}"
+    non_asset_upper = {
+        "VIP", "APR", "APY", "RWA", "USD", "NEW", "HOT", "PRO", "MAX", "APP", "WEB",
+        "OKX", "BTC", "ETH", "BJT", "UTC", "TGE", "NFT", "DAO", "DEX", "CEX", "KYC", "API", "WSOT",
+    }
+    # Only match genuine ALL-UPPERCASE ticker symbols (e.g. RLUSD, XRP, STBL, ZEST, SXT, BERA)
+    tickers = sorted({
+        t for t in re.findall(r"(?<![A-Za-z0-9])[A-Z][A-Z0-9]{1,8}(?![A-Za-z0-9])", txt)
+        if t not in non_asset_upper
+    })
+    # Match concrete reward pool/quantity amounts (exclude generic % APY rates)
+    pool_nums = sorted({
+        n.replace(",", "")
+        for n in re.findall(r"(?<!\d)\d[\d,]*(?:\.\d+)?(?:万|亿|M|K)(?!\d)", txt)
+    })
+    if len(tickers) >= 2 and pool_nums:
+        return f"{ex}|{cat}|{'_'.join(tickers[:4])}|{'_'.join(pool_nums[:2])}"
+    return ""
 
 
 def _classify_earn_promo(title: str, summary: str, tier: str) -> tuple[str, str]:
@@ -381,6 +480,7 @@ def fetch_eqn_news_and_earn(timeout: int = 8) -> tuple[list[dict[str, Any]], lis
                 tier = "HIGH" if re.search(r"(?:Simple\s*Earn|活期|Yield\s*Arena|Hold\s*&\s*Earn|Alpha\s*积分.*领取|瓜分)", clean_head, re.IGNORECASE) else "LOW_RISK"
                 earn_cat, earn_cat_label = _classify_earn_promo(clean_head, "", tier)
                 reward_m = re.search(r"(?:最高\s*[\d.]+%\s*(?:APR|APY|年化收益率?)|领取\s*[\d,]+\s*枚\s*[A-Z0-9]+|瓜分\s*[\d万亿.]+\s*[A-Z]+|[\d万亿.]+\s*[A-Z]+\s*奖励)", clean_head, re.IGNORECASE)
+                p_title, p_summary = _split_promo_title_summary(clean_head, src_name)
                 earn_promos.append({
                     "exchange": exch,
                     "tier": tier,
@@ -389,10 +489,10 @@ def fetch_eqn_news_and_earn(timeout: int = 8) -> tuple[list[dict[str, Any]], lis
                     "earn_cat": earn_cat,
                     "earn_cat_label": earn_cat_label,
                     "promo_type": "理财提醒" if "earn" in chs else "Alpha空投",
-                    "title": clean_head[:105],
+                    "title": p_title,
                     "reward": reward_m.group(0) if reward_m else "",
                     "window": f"发布于 {dt_str[5:16]} BJT",
-                    "summary": clean_head[105:240].strip() if len(clean_head) > 105 else f"来源：{src_name}（点击查看原文规则）",
+                    "summary": p_summary,
                     "url": raw_url,
                     "created_at": ts_sec,
                 })
@@ -441,11 +541,25 @@ def merge_eqn_into_bundle(
                 pr["earn_cat"] = ec
                 pr["earn_cat_label"] = el
         seen_p = {_norm_title_key(p.get("title", "")) for p in promos if isinstance(p, dict)}
+        seen_urls = {u for p in promos if isinstance(p, dict) for u in (_norm_promo_url(p.get("url", "")),) if u}
+        seen_sem = {
+            sk
+            for p in promos
+            if isinstance(p, dict)
+            for sk in (_promo_semantic_key(str(p.get("exchange") or ""), str(p.get("title") or ""), str(p.get("summary") or ""), str(p.get("earn_cat") or "")),)
+            if sk
+        }
         for ep in eqn_promos:
             k = _norm_title_key(ep.get("title", ""))
-            if not k or k in seen_p:
+            u = _norm_promo_url(ep.get("url", ""))
+            sk = _promo_semantic_key(str(ep.get("exchange") or ""), str(ep.get("title") or ""), str(ep.get("summary") or ""), str(ep.get("earn_cat") or ""))
+            if not k or k in seen_p or (u and u in seen_urls) or (sk and sk in seen_sem):
                 continue
             seen_p.add(k)
+            if u:
+                seen_urls.add(u)
+            if sk:
+                seen_sem.add(sk)
             promos.append(ep)
         promos.sort(key=lambda p: (0 if p.get("earn_cat") in ("HIGH_YIELD", "AIRDROP") else 1 if p.get("earn_cat") == "CAMPAIGN" else 2, -int(p.get("created_at") or 0)))
         labs["exchange_promos"] = promos[:16]

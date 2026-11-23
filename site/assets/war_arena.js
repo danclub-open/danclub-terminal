@@ -1956,6 +1956,11 @@
       return `<span class="pill ${cls}">${esc(f.tier_label)}</span>`;
     };
 
+    const freshEl = $("war-fleet-freshness");
+    if (freshEl && war.data?.updated_at) {
+      freshEl.textContent = `链上快照 ${fmtTimeShort(war.data.updated_at)} BJT · 每 15 分钟实盘核验 · 已平仓实体自动剔除`;
+    }
+
     tbody.innerHTML = filtered.length
       ? filtered
           .map((f) => {
@@ -2020,7 +2025,7 @@
         ? `<a class="whale-x-pill whale-x-pill-lg" href="https://x.com/${esc(validHandle)}" target="_blank" rel="noopener noreferrer">𝕏 @${esc(validHandle)} ↗</a>`
         : "";
     }
-    $("wd-sub").textContent = `${ent.short_addr} · ${ent.addr_count} 个关联地址去重合并 · ${ent.tier_label}`;
+    $("wd-sub").textContent = `${ent.short_addr} · ${ent.addr_count} 个关联地址去重合并 · ${ent.tier_label} · 链上快照 ${fmtTimeShort(war.data?.updated_at)} BJT`;
 
     $("wd-kpis").innerHTML = [
       { k: "总名义仓位", v: fmtCompact(ent.total_notional_usd), cls: "" },
@@ -2048,6 +2053,7 @@
         const levTxt = levSafeNum
           ? `${levSafeNum}x${p.lev_type === "isolated" ? "逐仓" : p.lev_type === "cross" ? "全仓" : p.lev_type === "mixed" ? "混合" : ""}`
           : "";
+        const venueTag = Array.isArray(p.venues) && p.venues.length > 1 ? `跨所(${p.venues.join("+")})` : "";
         const liqLabel = p.legs && p.legs > 1 ? "最近强平" : "强平";
         const upnlHtml = p.upnl != null ? `<span class="${p.upnl >= 0 ? "ok" : "risk"}">浮${p.upnl >= 0 ? "盈" : "亏"} ${fmtSignedCompact(p.upnl)}</span>` : "";
         const liqDist =
@@ -2061,6 +2067,7 @@
               <b>${esc(p.coin)}</b>
               <span class="${p.side === "LONG" ? "ok" : "risk"}">${p.side === "LONG" ? "LONG" : "SHORT"}</span>
               ${levTxt ? `<span class="sess-tag">${esc(levTxt)}</span>` : ""}
+              ${venueTag ? `<span class="sess-tag">${esc(venueTag)}</span>` : ""}
             </span>
             <span><b>${fmtCompact(p.usd)}</b></span>
           </div>

@@ -646,6 +646,115 @@ class TestExporterIntegrityAndHygiene(unittest.TestCase):
         self.assertIn("el.load()", war_js)
         self.assertIn("safeStoreGet", js)
 
+    def test_buyside_audit_whale_reconciliation_feed_macro_and_promo_dedup(self) -> None:
+        # 1. Macro vs Crypto vs INTEL classification (\bSEC\b must NOT match "Secretary")
+        self.assertEqual(
+            syncer._classify_eqn_item(["main"], "UK Secretary of State Haigh: Competition should thrive", "FinancialJuice"),
+            ("MACRO", "美股·宏观"),
+        )
+        self.assertEqual(
+            syncer._classify_eqn_item(["main"], "LIBYA NOC: SHARARA OIL PIPELINE REOPENS", "FirstSquawk"),
+            ("MACRO", "美股·宏观"),
+        )
+        self.assertEqual(
+            syncer._classify_eqn_item(["main"], "SEC approves spot ETH staking amendment", "Bloomberg"),
+            ("INTEL", "深度预警"),
+        )
+        self.assertEqual(
+            syncer._classify_eqn_item(["main"], "Binance lists new BTC perp contract", "FirstSquawk"),
+            ("CRYPTO", "加密快讯"),
+        )
+
+        # 2. Cross-source promo semantic deduplication (glued Chinese+ASCII tokens) & clean sentence split
+        k1 = syncer._promo_semantic_key("Binance", "币安持有RLUSD瓜分60万XRP", "", "HIGH_YIELD")
+        k2 = syncer._promo_semantic_key("Binance", "在任意币安账户持有RLUSD，瓜分60万XRP奖励", "", "HIGH_YIELD")
+        self.assertTrue(k1)
+        self.assertEqual(k1, k2)
+        # Single-token / VIP marketing promos and distinct query-id URLs MUST NOT collide
+        self.assertEqual(syncer._promo_semantic_key("Binance", "VIP USDT 10% 活期活动A", "", "HIGH_YIELD"), "")
+        self.assertEqual(syncer._promo_semantic_key("Binance", "VIP USDT 10% 活期活动B", "", "HIGH_YIELD"), "")
+        self.assertNotEqual(
+            syncer._norm_promo_url("https://example.com/promo?id=101&utm_source=x"),
+            syncer._norm_promo_url("https://example.com/promo?id=102&utm_source=y"),
+        )
+        self.assertEqual(
+            syncer._norm_promo_url("https://example.com/promo?id=101&utm_source=x"),
+            syncer._norm_promo_url("https://example.com/promo?id=101&ref=abc"),
+        )
+        t, s = syncer._split_promo_title_summary(
+            "STBL (STBL) 现已在币安 Alpha 上线！拥有至少 250 点币安 Alpha 积分的用户即可领取 1,675 枚 STBL 代币空投，先到先得。",
+            "币安公告",
+        )
+        self.assertTrue(t.endswith("！"))
+        self.assertTrue(s.startswith("拥有至少"))
+
+        # 3. Multi-venue whale reconciliation + low-price meme precision + 5% unprofiled leg fail-closed
+        with tempfile.TemporaryDirectory() as td:
+            wdb = Path(td) / "whale_audit.db"
+            c = sqlite3.connect(str(wdb))
+            c.executescript(
+                """
+                CREATE TABLE address_registry (identifier TEXT, entity_cluster_id TEXT, entity_label TEXT, external_labels_json TEXT);
+                CREATE TABLE onchain_profiles (
+                    identifier TEXT, hl_found INT, hl_display_name TEXT, hl_alltime_pnl REAL,
+                    hl_month_pnl REAL, hl_week_pnl REAL, hl_account_value REAL,
+                    hl_positions_json TEXT, hl_hip3_positions_json TEXT, aster_positions_json TEXT
+                );
+                CREATE TABLE live_ls_snapshots (ts INT, cohort TEXT, coin TEXT, long_entities INT, short_entities INT, balanced_entities INT, headcount_long_pct REAL, long_usd REAL, short_usd REAL, net_usd REAL, notional_long_pct REAL, btc_price REAL, eth_price REAL);
+                CREATE TABLE live_entity_pos_history (ts INT, entity_cluster_id TEXT, tier TEXT, coin TEXT, szi REAL, signed_ntl_usd REAL, mark_px REAL);
+                """
+            )
+            # Whale 1: Cross-venue HL (-650) + Aster (-150) = -800 BTC exact match
+            c.execute("INSERT INTO address_registry VALUES ('0x1111111111111111111111111111111111111111', 'ent_mv', 'priv', '[]')")
+            c.execute(
+                "INSERT INTO onchain_profiles VALUES (?, 1, 'MultiVenue', 1e6, 5e5, 1e5, 5e6, ?, '[]', ?)",
+                (
+                    "0x1111111111111111111111111111111111111111",
+                    json.dumps([{"coin": "BTC", "side": "SHORT", "szi": -650.0, "ntl_usd": 39000000.0, "entry_px": 66000.0, "liq_px": 85000.0, "upnl": 3900000.0, "lev": 20, "lev_type": "cross"}]),
+                    json.dumps([{"coin": "BTC", "side": "SHORT", "szi": -150.0, "ntl_usd": 9000000.0, "entry_px": 0.0, "liq_px": None, "upnl": 900000.0, "lev": None}]),
+                ),
+            )
+            c.execute("INSERT INTO live_entity_pos_history VALUES (1795430000, 'ent_mv', 'S_SMART_WHALE', 'BTC', -800.0, -48000000.0, 60000.0)")
+            # Whale 2: Unprofiled 5% extra leg (prof=95 vs live=100 -> must fail closed!)
+            c.execute("INSERT INTO address_registry VALUES ('0x2222222222222222222222222222222222222222', 'ent_drift', 'priv', '[]')")
+            c.execute(
+                "INSERT INTO onchain_profiles VALUES (?, 1, 'Drifted', 1e6, 5e5, 1e5, 5e6, ?, '[]', '[]')",
+                (
+                    "0x2222222222222222222222222222222222222222",
+                    json.dumps([{"coin": "BTC", "side": "LONG", "szi": 95.0, "ntl_usd": 9500000.0, "entry_px": 100.0, "liq_px": 50.0, "upnl": 47.5, "lev": 10, "lev_type": "cross"}]),
+                ),
+            )
+            c.execute("INSERT INTO live_entity_pos_history VALUES (1795430000, 'ent_drift', 'S_SMART_WHALE', 'BTC', 100.0, 10050000.0, 100.5)")
+            # Whale 3: Low-price meme token (1e9 @ 0.000060 -> mark 0.000100 => +40,000 exact uPnL, NOT 0!)
+            c.execute("INSERT INTO address_registry VALUES ('0x3333333333333333333333333333333333333333', 'ent_meme', 'priv', '[]')")
+            c.execute(
+                "INSERT INTO onchain_profiles VALUES (?, 1, 'MemeWhale', 1e6, 5e5, 1e5, 5e6, ?, '[]', '[]')",
+                (
+                    "0x3333333333333333333333333333333333333333",
+                    json.dumps([{"coin": "PEPE", "side": "LONG", "szi": 1000000000.0, "ntl_usd": 100000.0, "entry_px": 0.00006, "liq_px": 0.00003, "upnl": 40000.0, "lev": 5, "lev_type": "cross"}]),
+                ),
+            )
+            c.execute("INSERT INTO live_entity_pos_history VALUES (1795430000, 'ent_meme', 'S_SMART_WHALE', 'PEPE', 1000000000.0, 100000.0, 0.0001)")
+            c.commit()
+            c.close()
+
+            w = wexp.export_whales(wdb)
+            by_d = {f["display"]: f for f in w["flagships"]}
+            p_mv = by_d["MultiVenue"]["positions"][0]
+            self.assertEqual(p_mv["venues"], ["Aster", "HL"])
+            self.assertIsNone(p_mv["entry_px"])  # Aster lacks entry_px -> fail-closed
+            self.assertIsNone(p_mv["liq_px"])    # Cross-venue -> omit HL-only liq_px
+            self.assertEqual(p_mv["upnl"], 4800000.0)
+
+            p_dr = by_d["Drifted"]["positions"][0]
+            self.assertIsNone(p_dr["entry_px"])  # 5% qty drift -> fail-closed!
+            self.assertIsNone(p_dr["upnl"])
+            self.assertIsNone(p_dr["liq_px"])
+
+            p_mm = by_d["MemeWhale"]["positions"][0]
+            self.assertEqual(p_mm["entry_px"], 0.00006)
+            self.assertEqual(p_mm["upnl"], 40000.0)
+
 
 if __name__ == "__main__":
     unittest.main()
