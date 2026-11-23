@@ -472,7 +472,7 @@
         return;
       }
       war.hasUserGesture = true;
-      if (t && typeof t.closest === "function" && t.closest("#btn-war-sound, #war-audio-prompt, #war-local-file, .war-local-btn, #war-track-select, #btn-war-next-track, #war-yt-pip")) {
+      if (t && typeof t.closest === "function" && t.closest('#btn-war-sound, #war-audio-prompt, #war-local-file, .war-local-btn, #war-track-select, #btn-war-next-track, #war-yt-pip, .nav-tab:not([data-tab="war"])')) {
         disarmGestureUnlock();
         return;
       }
@@ -659,7 +659,7 @@
 
   function stopAnthem(keepPreference = false) {
     war.playSeq += 1;
-    destroyYouTubePlayer(!keepPreference);
+    destroyYouTubePlayer(true);
     if (war.bgm) {
       war.bgm.dataset.playSeq = "";
       try {

@@ -162,14 +162,14 @@ a:hover {
 .ribbon-scroll {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   overflow-x: auto;
   scrollbar-width: none;
   flex: 1;
   min-width: 0;
-  padding-right: 20px;
-  -webkit-mask-image: linear-gradient(to right, #000 0%, #000 calc(100% - 20px), transparent 100%);
-  mask-image: linear-gradient(to right, #000 0%, #000 calc(100% - 20px), transparent 100%);
+  padding-right: 16px;
+  -webkit-mask-image: linear-gradient(to right, #000 0%, #000 calc(100% - 16px), transparent 100%);
+  mask-image: linear-gradient(to right, #000 0%, #000 calc(100% - 16px), transparent 100%);
 }
 
 .ribbon-scroll::-webkit-scrollbar {
@@ -189,11 +189,11 @@ a:hover {
   align-items: center;
   gap: 4px;
   flex: 0 0 auto;
-  padding: 2px 7px;
+  padding: 2px 5.5px;
   background: var(--surface-2);
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
-  font-size: 11px;
+  font-size: 10.5px;
   font-family: var(--mono);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
