@@ -159,7 +159,8 @@
   }
 
   function switchTab(tab, focusElId = null) {
-    const valid = ["war", "overview", "arb", "flows", "labs", "feed", "open"];
+    if (tab === "labs") tab = "dca";
+    const valid = ["war", "overview", "arb", "flows", "earn", "dca", "feed", "open"];
     if (!valid.includes(tab)) tab = "war";
     state.activeTab = tab;
     document.querySelectorAll(".nav-tab").forEach((btn) => {
@@ -1252,7 +1253,7 @@
       .join("");
 
     const hist = dca.history || [];
-    if (state.activeTab === "labs") {
+    if (state.activeTab === "dca") {
       renderLineChart(
         "dca-chart-box",
         stratOrder.map((st) => ({
@@ -1461,7 +1462,7 @@
     else if (state.activeTab === "war") window.DanClubWarRoom?.rerender();
     else if (state.activeTab === "arb") renderArb();
     else if (state.activeTab === "flows") renderFlows();
-    else if (state.activeTab === "labs") renderLabs();
+    else if (state.activeTab === "dca") renderLabs();
   }
 
   /* ---------- Live Browser-Side Crypto + Binance Spot bStocks Tickers (Zero 451 Geo-Block!) ---------- */
