@@ -29,7 +29,7 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import quote as url_quote, urlparse
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
@@ -581,6 +581,306 @@ def merge_eqn_into_bundle(
         labs["exchange_promos"] = promos[:16]
 
 
+DEFAULT_ZH_CACHE_PATH = Path.home() / ".cache" / "danclub" / "headline_zh_cache.json"
+_ZH_CACHE_MAX_ENTRIES = 2500
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+_ASCII_ALPHA_RE = re.compile(r"[A-Za-z]")
+_TRANS_BAD_RE = re.compile(r"(?:MYMEMORY\s+WARNING|QUERY\s+LENGTH\s+LIMIT|PLEASE\s+SELECT\s+TWO)", re.IGNORECASE)
+
+
+def _needs_zh_translation(text: str) -> bool:
+    """Return True when headline/body is predominantly English with little or no Chinese text."""
+    s = str(text or "").strip()
+    if len(s) < 12:
+        return False
+    cjk_cnt = len(_CJK_RE.findall(s))
+    alpha_cnt = len(_ASCII_ALPHA_RE.findall(s))
+    return (cjk_cnt < 4 and alpha_cnt >= 12) or (alpha_cnt >= 24 and cjk_cnt * 4 < alpha_cnt)
+
+
+def _zh_cache_key(text: str) -> str:
+    norm = re.sub(r"\s+", " ", str(text or "")).strip()
+    return hashlib.sha256(norm.encode("utf-8")).hexdigest()[:16]
+
+
+def _load_zh_cache(cache_path: Path) -> dict[str, dict[str, Any]]:
+    try:
+        if not cache_path.exists():
+            return {}
+        obj = json.loads(cache_path.read_text(encoding="utf-8"))
+        if isinstance(obj, dict):
+            return {
+                k: v
+                for k, v in obj.items()
+                if isinstance(k, str) and isinstance(v, dict) and bool(_valid_zh_result(str(v.get("zh") or "")))
+            }
+    except Exception:
+        pass
+    return {}
+
+
+def _save_zh_cache(cache_path: Path, cache: dict[str, dict[str, Any]]) -> None:
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        if len(cache) > _ZH_CACHE_MAX_ENTRIES:
+            ordered = sorted(cache.items(), key=lambda kv: int(kv[1].get("ts") or 0), reverse=True)
+            cache = dict(ordered[:_ZH_CACHE_MAX_ENTRIES])
+        payload = json.dumps(cache, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        fd, tmp_name = tempfile.mkstemp(prefix=".zhcache.", dir=str(cache_path.parent))
+        try:
+            os.chmod(tmp_name, 0o600)
+            view = memoryview(payload)
+            written = 0
+            while written < len(view):
+                n = os.write(fd, view[written:])
+                if n <= 0:
+                    raise OSError("short write")
+                written += n
+            os.fsync(fd)
+            os.close(fd)
+            fd = -1
+            os.replace(tmp_name, str(cache_path))
+        finally:
+            if fd >= 0:
+                os.close(fd)
+            try:
+                os.unlink(tmp_name)
+            except FileNotFoundError:
+                pass
+    except Exception:
+        pass
+
+
+def _valid_zh_result(zh: str) -> str:
+    cleaned = re.sub(r"\s+", " ", str(zh or "")).strip()
+    cleaned = re.sub(r"\s*([：，。！？；])\s*", r"\1", cleaned)
+    if not cleaned or len(cleaned) > 240:
+        return ""
+    if _TRANS_BAD_RE.search(cleaned):
+        return ""
+    if len(_CJK_RE.findall(cleaned)) < 2:
+        return ""
+    return cleaned
+
+
+def _translate_batch_clients5(texts: list[str], timeout: float = 6.0) -> list[str]:
+    """Batch-translate short English headlines via Google clients5 repeated-q API (independent JSON items)."""
+    clean_in = [re.sub(r"[\r\n]+", " ", t).strip() for t in texts]
+    if not clean_in:
+        return []
+    qs = "&".join(
+        ["client=dict-chrome-ex", "sl=en", "tl=zh-CN"]
+        + ["q=" + url_quote(t) for t in clean_in]
+    )
+    url = "https://clients5.google.com/translate_a/t?" + qs
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=max(0.2, float(timeout))) as resp:
+        data = json.loads(resp.read(256 * 1024).decode("utf-8", errors="replace"))
+    if not isinstance(data, list) or len(data) != len(clean_in):
+        return []
+    out: list[str] = []
+    for row in data:
+        raw_item = row[0] if isinstance(row, list) and row else row
+        if not isinstance(raw_item, str):
+            return []
+        out.append(_valid_zh_result(re.sub(r"[\r\n]+", " ", raw_item)))
+    return out
+
+
+def _translate_single_mymemory(text: str, timeout: float = 5.0) -> str:
+    clean_in = re.sub(r"[\r\n]+", " ", text).strip()
+    if not clean_in or len(clean_in) > 260:
+        # Never silently truncate & cache under the full-text hash
+        return ""
+    url = "https://api.mymemory.translated.net/get?langpair=en|zh-CN&q=" + url_quote(clean_in)
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=max(0.2, float(timeout))) as resp:
+        data = json.loads(resp.read(128 * 1024).decode("utf-8", errors="replace"))
+    if not isinstance(data, dict):
+        return ""
+    tr = (data.get("responseData") or {}).get("translatedText")
+    return _valid_zh_result(str(tr or ""))
+
+
+def _default_translate_en_list(texts: list[str], *, max_wall_sec: float = 18.0) -> list[str]:
+    """Translate up to N English strings in small batches with wall-clock deadline & circuit breaker."""
+    results = [""] * len(texts)
+    deadline = time.monotonic() + max_wall_sec
+    consec_fail = 0
+    idx = 0
+    while idx < len(texts) and time.monotonic() < deadline and consec_fail < 2:
+        batch_indices: list[int] = []
+        batch_texts: list[str] = []
+        char_budget = 0
+        while idx < len(texts) and len(batch_texts) < 6:
+            t = texts[idx]
+            if batch_texts and (char_budget + len(t) > 700):
+                break
+            batch_indices.append(idx)
+            batch_texts.append(t)
+            char_budget += len(t) + 4
+            idx += 1
+
+        rem = deadline - time.monotonic()
+        if rem < 1.0:
+            break
+        translated: list[str] = []
+        try:
+            translated = _translate_batch_clients5(batch_texts, timeout=min(6.0, rem))
+        except Exception:
+            translated = []
+
+        if len(translated) == len(batch_texts) and any(translated):
+            consec_fail = 0
+            for bi, zh in zip(batch_indices, translated):
+                results[bi] = zh
+        else:
+            # Fallback individually if batch endpoint failed
+            batch_ok = 0
+            for bi, src_txt in zip(batch_indices, batch_texts):
+                rem = deadline - time.monotonic()
+                if rem < 1.0:
+                    break
+                zh = ""
+                try:
+                    single = _translate_batch_clients5([src_txt], timeout=min(5.0, rem))
+                    zh = single[0] if single else ""
+                except Exception:
+                    pass
+                rem = deadline - time.monotonic()
+                if not zh and rem >= 1.0:
+                    try:
+                        zh = _translate_single_mymemory(src_txt, timeout=min(5.0, rem))
+                    except Exception:
+                        zh = ""
+                if zh:
+                    results[bi] = zh
+                    batch_ok += 1
+            if batch_ok > 0:
+                consec_fail = 0
+            else:
+                consec_fail += 1
+    return results
+
+
+def _run_translate_en_list_bounded(texts: list[str], *, hard_timeout_sec: float = 22.0) -> list[str]:
+    """Run external translation in a killable subprocess so trickle reads can NEVER stall snapshot publish."""
+    if not texts:
+        return []
+    proc = subprocess.Popen(
+        [sys.executable, str(Path(__file__).resolve()), "--translate-worker"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    payload = json.dumps(texts, ensure_ascii=False).encode("utf-8")
+    try:
+        out_b, _ = proc.communicate(input=payload, timeout=hard_timeout_sec)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.communicate()
+        return []
+    if proc.returncode != 0 or not out_b:
+        return []
+    try:
+        parsed = json.loads(out_b.decode("utf-8", errors="replace"))
+        if isinstance(parsed, list) and len(parsed) == len(texts):
+            return [str(x or "") for x in parsed]
+    except Exception:
+        pass
+    return []
+
+
+def translate_english_feed_items(
+    bundle: dict[str, Any],
+    *,
+    cache_path: Path = DEFAULT_ZH_CACHE_PATH,
+    translator: Any = None,
+    max_uncached: int = 45,
+    blocklist_path: Path | None = None,
+    require_blocklist: bool = False,
+) -> int:
+    """Translate English-only feed headlines/bodies & promo titles to Simplified Chinese with persistent caching."""
+    cache = _load_zh_cache(cache_path)
+    now_ts = int(time.time())
+    targets: list[tuple[dict[str, Any], str, str | None, str]] = []  # (obj, field, en_backup_field, src_text)
+
+    feed = bundle.get("feed")
+    if isinstance(feed, dict):
+        for it in feed.get("items") or []:
+            if not isinstance(it, dict):
+                continue
+            hl = str(it.get("headline") or "").strip()
+            if _needs_zh_translation(hl):
+                targets.append((it, "headline", "headline_en", hl))
+            bd = str(it.get("body") or "").strip()
+            if _needs_zh_translation(bd):
+                targets.append((it, "body", None, bd))
+
+    labs = bundle.get("labs")
+    if isinstance(labs, dict):
+        for pr in labs.get("exchange_promos") or []:
+            if not isinstance(pr, dict):
+                continue
+            tt = str(pr.get("title") or "").strip()
+            if _needs_zh_translation(tt):
+                targets.append((pr, "title", None, tt))
+
+    if not targets:
+        return 0
+
+    uncached_map: dict[str, str] = {}
+    for _, _, _, txt in targets:
+        if len(txt) > 240:
+            continue
+        ck = _zh_cache_key(txt)
+        if ck not in cache and ck not in uncached_map and len(uncached_map) < max_uncached:
+            # Fail-closed pre-egress privacy gate: NEVER transmit sensitive/blocklisted text to third-party APIs
+            clean_egress = sanitize_text(txt, max_len=240)
+            if not clean_egress:
+                continue
+            try:
+                assert_clean_payload(
+                    clean_egress,
+                    blocklist_path=blocklist_path,
+                    require_blocklist=require_blocklist,
+                )
+            except PrivacyViolationError:
+                continue
+            uncached_map[ck] = clean_egress
+
+    cache_dirty = False
+    if uncached_map:
+        keys_list = list(uncached_map.keys())
+        texts_list = [uncached_map[k] for k in keys_list]
+        fn = translator or _run_translate_en_list_bounded
+        try:
+            zh_list = fn(texts_list)
+        except Exception:
+            zh_list = []
+        if isinstance(zh_list, list) and len(zh_list) == len(keys_list):
+            for ck, zh_raw in zip(keys_list, zh_list):
+                zh_ok = _valid_zh_result(zh_raw)
+                if zh_ok:
+                    cache[ck] = {"zh": zh_ok, "ts": now_ts}
+                    cache_dirty = True
+
+    applied = 0
+    for obj, field, en_field, src_txt in targets:
+        ck = _zh_cache_key(src_txt)
+        hit = cache.get(ck)
+        if hit and hit.get("zh"):
+            if en_field and not obj.get(en_field):
+                obj[en_field] = src_txt
+            obj[field] = hit["zh"]
+            hit["ts"] = now_ts
+            applied += 1
+
+    if cache_dirty:
+        _save_zh_cache(cache_path, cache)
+    return applied
+
+
 def _require_bounded_int(val: Any, field: str, lo: int = 0, hi: int = 10_000_000) -> int:
     if isinstance(val, bool) or not isinstance(val, int):
         raise ValueError(f"字段类型非法 ({field}): 期望 int，收到 {type(val).__name__}")
@@ -644,6 +944,12 @@ def _clean_bundle(bundle: dict[str, Any], *, blocklist_path: Path | None = None)
         if not isinstance(it, dict):
             continue
         it["headline"] = sanitize_text(it.get("headline"), max_len=190)
+        if it.get("headline_en"):
+            clean_en = sanitize_text(it.get("headline_en"), max_len=190)
+            if clean_en:
+                it["headline_en"] = clean_en
+            else:
+                it.pop("headline_en", None)
         it["body"] = sanitize_text(it.get("body"), max_len=240)
         it["source"] = sanitize_text(it.get("source"), max_len=40)
         it["impact_label"] = sanitize_text(it.get("impact_label"), max_len=80)
@@ -1035,8 +1341,21 @@ def main() -> int:
     parser.add_argument("--static-ssh-target", default=DEFAULT_STATIC_TARGET, help="Optional SSH static deploy host:/dir")
     parser.add_argument("--whale-db", default=DEFAULT_WHALE_DB, help="Optional local read-only whale_intel.db path")
     parser.add_argument("--skip-external", action="store_true", help="Skip external EQN news & Binance bStocks live HTTP fetches")
+    parser.add_argument("--translate-worker", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--repo-url", default="git@github.com:danclub-open/danclub-terminal.git", help="Git remote URL")
     args = parser.parse_args()
+
+    if args.translate_worker:
+        try:
+            raw_in = sys.stdin.read(512 * 1024)
+            texts = json.loads(raw_in) if raw_in else []
+            if not isinstance(texts, list):
+                texts = []
+            out = _default_translate_en_list([str(t or "") for t in texts], max_wall_sec=18.0)
+            sys.stdout.write(json.dumps(out, ensure_ascii=False))
+            return 0
+        except Exception:
+            return 1
 
     lock_fd = os.open(str(LOCK_FILE), os.O_RDWR | os.O_CREAT, 0o600)
     try:
@@ -1058,6 +1377,11 @@ def main() -> int:
             apply_bstocks_overlay(raw, bstocks)
             eqn_feed, eqn_promos = fetch_eqn_news_and_earn()
             merge_eqn_into_bundle(raw, eqn_feed, eqn_promos)
+            translate_english_feed_items(
+                raw,
+                blocklist_path=args.blocklist,
+                require_blocklist=args.require_blocklist,
+            )
         bundle = _clean_bundle(raw, blocklist_path=args.blocklist)
         if args.require_blocklist:
             assert_clean_payload(bundle, blocklist_path=args.blocklist, require_blocklist=True)

@@ -18,6 +18,22 @@
     activePromoCat: "ALL",
     activeFeedCat: "ALL",
     feedSearch: "",
+    feedAlertMode: "chime",
+    feedAlertScope: "all",
+    feedShowEn: false,
+    feedPrevSnapshotKeys: new Set(),
+    feedSeenHistory: new Set(),
+    feedFreshKeys: new Set(),
+    feedUnreadCount: 0,
+    feedInitialized: false,
+    feedBaselineTs: 0,
+    feedLatestGenMs: 0,
+    feedPollInFlight: false,
+    feedPollTimer: null,
+    feedPollAbortCtrl: null,
+    lastFeedPollMs: 0,
+    feedAudioCtx: null,
+    feedAudioUnlocked: false,
     liveCrypto: {},
     liveBstocks: {},
     prevLivePrice: {},
@@ -131,6 +147,17 @@
     const savedColor = safeStoreGet("danclub_color_mode");
     applyColorMode(savedColor === "cn" ? "cn" : "intl");
 
+    const savedAlertMode = safeStoreGet("danclub_feed_alert_mode");
+    if (["off", "chime", "tts"].includes(savedAlertMode)) {
+      state.feedAlertMode = savedAlertMode;
+    }
+    const savedAlertScope = safeStoreGet("danclub_feed_alert_scope");
+    if (["all", "major"].includes(savedAlertScope)) {
+      state.feedAlertScope = savedAlertScope;
+    }
+    state.feedShowEn = safeStoreGet("danclub_feed_show_en") === "1";
+    updateFeedAlertUi();
+
     $("btn-theme")?.addEventListener("click", () => {
       const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
       safeStoreSet("danclub_theme_v2", next);
@@ -173,6 +200,10 @@
       history.replaceState(null, "", `#${tab}`);
     }
     window.DanClubWarRoom?.setActive(tab === "war");
+    if (tab === "feed") {
+      state.feedUnreadCount = 0;
+      updateFeedBadge();
+    }
     // Wait one frame so visible containers have true non-zero clientWidth for 1:1 SVG rendering!
     requestAnimationFrame(() => {
       rerenderActiveCharts();
@@ -1331,6 +1362,342 @@
       : `<div class="muted small">当前分类暂无在期理财或羊毛活动</div>`;
   }
 
+  /* ---------- Feed Sound Alerts, Chinese TTS & Live Unread Detection ---------- */
+  function feedItemKey(it) {
+    const idNum = Number(it?.id || 0);
+    if (Number.isFinite(idNum) && idNum > 0) return `id:${idNum}`;
+    const base = String(it?.headline_en || it?.headline || "")
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, " ")
+      .slice(0, 64);
+    return `ts:${Number(it?.ts || 0)}|${base}`;
+  }
+
+  function addBoundedKey(setObj, key, limit) {
+    if (!key || setObj.has(key)) return;
+    setObj.add(key);
+    while (setObj.size > limit) {
+      const oldest = setObj.values().next().value;
+      if (oldest === undefined) break;
+      setObj.delete(oldest);
+    }
+  }
+
+  function isMajorFeedItem(it) {
+    const cc = String(it?.cat_code || "");
+    const lvl = String(it?.level || "");
+    return lvl === "major" || cc === "INTEL";
+  }
+
+  function ensureFeedAudioCtx(fromGesture = false) {
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return null;
+      if (!state.feedAudioCtx) {
+        if (!fromGesture) return null;
+        state.feedAudioCtx = new Ctx();
+      }
+      if (state.feedAudioCtx.state === "running") {
+        state.feedAudioUnlocked = true;
+      } else if (fromGesture && state.feedAudioCtx.state === "suspended") {
+        state.feedAudioCtx
+          .resume()
+          .then(() => {
+            state.feedAudioUnlocked = true;
+            updateFeedAlertUi();
+          })
+          .catch(() => {});
+      }
+      return state.feedAudioCtx;
+    } catch {
+      return null;
+    }
+  }
+
+  function scheduleFeedChimeNodes(ctx, isMajor) {
+    try {
+      const now = ctx.currentTime + 0.015;
+      const notes = isMajor
+        ? [
+            { freq: 880, start: 0.0, dur: 0.14, gain: 0.15 },
+            { freq: 1108.73, start: 0.1, dur: 0.15, gain: 0.14 },
+            { freq: 1318.51, start: 0.2, dur: 0.28, gain: 0.16 },
+          ]
+        : [
+            { freq: 659.25, start: 0.0, dur: 0.16, gain: 0.13 },
+            { freq: 987.77, start: 0.11, dur: 0.24, gain: 0.11 },
+          ];
+      notes.forEach((n) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = isMajor ? "triangle" : "sine";
+        osc.frequency.setValueAtTime(n.freq, now + n.start);
+        gain.gain.setValueAtTime(0.0001, now + n.start);
+        gain.gain.exponentialRampToValueAtTime(n.gain, now + n.start + 0.014);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + n.start + n.dur);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(now + n.start);
+        osc.stop(now + n.start + n.dur + 0.02);
+      });
+    } catch {}
+  }
+
+  function playFeedChime(isMajor = false, fromGesture = false) {
+    const ctx = ensureFeedAudioCtx(fromGesture);
+    if (!ctx) return false;
+    if (ctx.state === "running") {
+      scheduleFeedChimeNodes(ctx, isMajor);
+      return true;
+    }
+    if (fromGesture && ctx.state === "suspended") {
+      ctx
+        .resume()
+        .then(() => {
+          state.feedAudioUnlocked = true;
+          scheduleFeedChimeNodes(ctx, isMajor);
+          updateFeedAlertUi();
+        })
+        .catch(() => {});
+      return true;
+    }
+    return false;
+  }
+
+  function stopFeedSpeech() {
+    try {
+      if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+    } catch {}
+  }
+
+  function speakFeedHeadlines(headlines) {
+    if (!("speechSynthesis" in window) || typeof window.SpeechSynthesisUtterance !== "function") {
+      return false;
+    }
+    const list = (headlines || [])
+      .map((h) =>
+        String(h || "")
+          .replace(/https?:\/\/\S+/gi, "")
+          .replace(/[#*_`~]/g, " ")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 75)
+      )
+      .filter(Boolean)
+      .slice(0, 2);
+    if (!list.length) return false;
+    try {
+      const synth = window.speechSynthesis;
+      synth.cancel();
+      const voices = typeof synth.getVoices === "function" ? synth.getVoices() : [];
+      const zhVoice =
+        voices.find((v) => /zh[-_]?cn/i.test(String(v.lang || ""))) ||
+        voices.find((v) => /^zh/i.test(String(v.lang || ""))) ||
+        null;
+      list.forEach((txt) => {
+        const u = new window.SpeechSynthesisUtterance(txt);
+        u.lang = "zh-CN";
+        if (zhVoice) u.voice = zhVoice;
+        u.rate = 1.08;
+        u.pitch = 1.0;
+        u.volume = 0.92;
+        synth.speak(u);
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function updateFeedBadge() {
+    const el = $("nav-feed-badge");
+    if (!el) return;
+    if (state.feedUnreadCount > 0 && state.activeTab !== "feed") {
+      el.textContent = state.feedUnreadCount > 99 ? "99+" : `+${state.feedUnreadCount}`;
+      el.hidden = false;
+    } else {
+      el.textContent = "0";
+      el.hidden = true;
+    }
+  }
+
+  function updateFeedAlertUi(customMsg = "") {
+    $("feed-alert-mode")
+      ?.querySelectorAll(".seg-btn")
+      .forEach((b) => b.classList.toggle("active", b.dataset.mode === state.feedAlertMode));
+    $("feed-alert-scope")
+      ?.querySelectorAll(".seg-btn")
+      .forEach((b) => b.classList.toggle("active", b.dataset.scope === state.feedAlertScope));
+    const enBtn = $("btn-feed-show-en");
+    if (enBtn) {
+      enBtn.classList.toggle("btn-toggle-active", state.feedShowEn);
+      enBtn.setAttribute("aria-pressed", state.feedShowEn ? "true" : "false");
+    }
+    const st = $("feed-alert-status");
+    if (!st) return;
+    if (customMsg) {
+      st.textContent = customMsg;
+      return;
+    }
+    const scopeTxt = state.feedAlertScope === "major" ? "仅重磅/预警" : "全部快讯";
+    if (state.feedAlertMode === "off") {
+      st.textContent = "已静音 · 仍每45秒自动拉取新快讯";
+    } else if (state.feedAlertMode === "tts") {
+      const ttsOk = "speechSynthesis" in window && typeof window.SpeechSynthesisUtterance === "function";
+      if (!ttsOk) {
+        st.textContent = `浏览器不支持语音合成，将回退提示音 · ${scopeTxt}`;
+      } else {
+        st.textContent = state.feedAudioUnlocked
+          ? `中文语音播报已就绪 · ${scopeTxt} · 每45秒监测`
+          : `语音播报待机（点击页面任意处解锁声音） · ${scopeTxt}`;
+      }
+    } else {
+      st.textContent = state.feedAudioUnlocked
+        ? `提示音已就绪 · ${scopeTxt} · 每45秒监测`
+        : `提示音待机（点击页面任意处解锁声音） · ${scopeTxt}`;
+    }
+  }
+
+  function validFeedTs(ts, nowSec) {
+    const n = Number(ts);
+    if (!Number.isFinite(n)) return 0;
+    return n >= 1577836800 && n <= nowSec + 300 ? n : 0;
+  }
+
+  function parseSnapshotGenMs(meta) {
+    const raw = String(meta?.generated_at_bjt || "").trim();
+    if (!raw) return 0;
+    const iso = raw.replace(/^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})\s*([+-]\d{2}:?\d{2}|Z)?$/, "$1T$2$3");
+    const ms = Date.parse(iso);
+    return Number.isFinite(ms) ? ms : 0;
+  }
+
+  function ingestFeedData(feedObj, { notify = false } = {}) {
+    if (!feedObj || !Array.isArray(feedObj.items)) return false;
+    const snapGenMs = parseSnapshotGenMs(feedObj.meta);
+    if (state.feedLatestGenMs > 0 && (snapGenMs === 0 || snapGenMs < state.feedLatestGenMs)) {
+      // Drop unversioned or stale out-of-order response once a valid versioned snapshot has landed
+      return false;
+    }
+    if (snapGenMs > state.feedLatestGenMs) {
+      state.feedLatestGenMs = snapGenMs;
+    }
+
+    state.feed = feedObj;
+    if (snapGenMs > 0 && feedObj.meta?.generated_at_bjt) {
+      const gen = String(feedObj.meta.generated_at_bjt).replace(" +08:00", " BJT");
+      const metaEl = $("meta-updated");
+      if (metaEl) metaEl.textContent = `快照 ${gen.slice(5)}`;
+    }
+
+    const items = feedObj.items;
+    const nowSec = Math.floor(Date.now() / 1000);
+    let maxValidTs = 0;
+    const nextSnapshotKeys = new Set();
+    items.forEach((it) => {
+      nextSnapshotKeys.add(feedItemKey(it));
+      const vts = validFeedTs(it?.ts, nowSec);
+      if (vts > maxValidTs) maxValidTs = vts;
+    });
+
+    if (!state.feedInitialized) {
+      state.feedPrevSnapshotKeys = nextSnapshotKeys;
+      for (let i = items.length - 1; i >= 0; i--) {
+        addBoundedKey(state.feedSeenHistory, feedItemKey(items[i]), 400);
+      }
+      state.feedBaselineTs = maxValidTs;
+      state.feedInitialized = true;
+      renderFeed();
+      updateFeedBadge();
+      updateFeedAlertUi();
+      return true;
+    }
+
+    // Self-heal baseline using the exact same validFeedTs guard (handles NaN, negative, stale, or future values)
+    if (state.feedBaselineTs !== 0 && !validFeedTs(state.feedBaselineTs, nowSec)) {
+      state.feedBaselineTs = maxValidTs;
+    }
+
+    const newlyArrived = [];
+    const cutoffTs = state.feedBaselineTs > 0 ? state.feedBaselineTs - 300 : 0;
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i];
+      const key = feedItemKey(it);
+      const alreadySeen = state.feedPrevSnapshotKeys.has(key) || state.feedSeenHistory.has(key);
+      if (!alreadySeen) {
+        const vts = validFeedTs(it?.ts, nowSec);
+        if (vts > 0 && (cutoffTs === 0 || vts >= cutoffTs)) {
+          newlyArrived.push(it);
+          addBoundedKey(state.feedFreshKeys, key, 30);
+        }
+      }
+    }
+    newlyArrived.reverse();
+
+    // Commit previous snapshot full keyset + bounded history AFTER diffing (immune to >400 self-eviction!)
+    state.feedPrevSnapshotKeys = nextSnapshotKeys;
+    for (let i = items.length - 1; i >= 0; i--) {
+      addBoundedKey(state.feedSeenHistory, feedItemKey(items[i]), 400);
+    }
+    if (maxValidTs > state.feedBaselineTs) {
+      state.feedBaselineTs = maxValidTs;
+    }
+
+    if (notify && newlyArrived.length > 0) {
+      const matched =
+        state.feedAlertScope === "major" ? newlyArrived.filter(isMajorFeedItem) : newlyArrived;
+      if (state.activeTab !== "feed") {
+        state.feedUnreadCount = Math.min(999, state.feedUnreadCount + newlyArrived.length);
+        updateFeedBadge();
+      }
+      if (matched.length > 0 && state.feedAlertMode !== "off") {
+        const hasMajor = matched.some(isMajorFeedItem);
+        const chimed = playFeedChime(hasMajor, false);
+        let spoken = false;
+        if (state.feedAlertMode === "tts") {
+          spoken = speakFeedHeadlines(matched.map((x) => x.headline));
+        }
+        const nowStr = fmtTimeHM(Math.floor(Date.now() / 1000));
+        if (chimed || spoken) {
+          updateFeedAlertUi(
+            `${nowStr} 收到 ${matched.length} 条新快讯（${spoken ? "已语音播报" : hasMajor ? "重磅提示音" : "提示音"}）`
+          );
+        } else {
+          updateFeedAlertUi(`${nowStr} 收到 ${matched.length} 条新快讯（点击页面任意处解锁声音）`);
+        }
+      }
+    }
+
+    renderFeed();
+    return true;
+  }
+
+  async function pollFeedLive() {
+    if (state.feedPollInFlight) return;
+    state.feedPollInFlight = true;
+    state.lastFeedPollMs = Date.now();
+    const ctrl = new AbortController();
+    state.feedPollAbortCtrl = ctrl;
+    const timeoutId = window.setTimeout(() => ctrl.abort(), 8000);
+    try {
+      const res = await fetch(`./api/v1/feed.json?t=${Date.now()}`, {
+        cache: "no-store",
+        signal: ctrl.signal,
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!data || !Array.isArray(data.items)) return;
+      ingestFeedData(data, { notify: true });
+    } catch {
+      // Fail-soft on transient timeout/offline
+    } finally {
+      window.clearTimeout(timeoutId);
+      if (state.feedPollAbortCtrl === ctrl) state.feedPollAbortCtrl = null;
+      state.feedPollInFlight = false;
+    }
+  }
+
   function renderFeed() {
     const items = state.feed?.items || [];
     // Update live 6-category counts in filter pills
@@ -1357,7 +1724,13 @@
     const filtered = items.filter((it) => {
       const cc = it.cat_code || "CRYPTO";
       if (state.activeFeedCat !== "ALL" && cc !== state.activeFeedCat) return false;
-      if (q && !`${it.headline} ${it.source} ${it.category} ${it.impact_label} ${it.market_ref} ${it.body} ${(it.coins || []).join(" ")}`.toLowerCase().includes(q)) return false;
+      if (
+        q &&
+        !`${it.headline} ${it.headline_en || ""} ${it.source} ${it.category} ${it.impact_label} ${it.market_ref} ${it.body} ${(it.coins || []).join(" ")}`
+          .toLowerCase()
+          .includes(q)
+      )
+        return false;
       return true;
     });
 
@@ -1378,15 +1751,20 @@
               tone === "bearish" ? "pill-risk" : tone === "bullish" ? "pill-ok" : tone === "warn" ? "pill-warn" : "pill-muted";
             const cc = it.cat_code || "CRYPTO";
             const href = safeHref(it.url);
+            const hasEn = Boolean(it.headline_en && it.headline_en !== it.headline);
+            const isFresh = state.feedFreshKeys.has(feedItemKey(it));
             return `
-        <article class="feed-item tone-${esc(tone)}">
+        <article class="feed-item tone-${esc(tone)}${isFresh ? " is-fresh" : ""}">
           <div class="feed-meta">
+            ${isFresh ? `<span class="pill feed-new-pill">新</span>` : ""}
             <span class="pill ${catPillCls(cc, it.level)}">${esc(it.category || labels[cc] || "快讯")}</span>
+            ${hasEn ? `<span class="pill pill-tr" title="已自动译为简体中文">已译</span>` : ""}
             ${it.source ? `<span class="pill pill-muted">${esc(it.source)}</span>` : ""}
             <span class="mono">${esc((it.dt_bjt || "").slice(5, 16))}</span>
             ${href ? `<a class="feed-ext-link" href="${esc(href)}" target="_blank" rel="noopener noreferrer">原文 ↗</a>` : ""}
           </div>
           <div class="feed-headline">${esc(it.headline)}</div>
+          ${state.feedShowEn && hasEn ? `<div class="feed-en-sub">EN: ${esc(it.headline_en)}</div>` : ""}
           ${it.body ? `<div class="muted small" style="margin-top:4px;">${esc(it.body)}</div>` : ""}
           ${
             it.impact_label || it.market_ref
@@ -1565,7 +1943,6 @@
     state.arb = arb;
     state.flows = flows;
     state.labs = labs;
-    state.feed = feed;
     if (whales) window.DanClubWarRoom?.setData(whales);
 
     // Seed crypto ribbon immediately from snapshot before first live WS/HTTP response lands
@@ -1575,14 +1952,18 @@
       }
     });
 
-    const gen = (overview?.meta?.generated_at_bjt || "--").replace(" +08:00", " BJT");
-    $("meta-updated").textContent = `快照 ${gen.slice(5)}`;
+    const ovGenMs = parseSnapshotGenMs(overview?.meta);
+    if (state.feedLatestGenMs === 0 || (ovGenMs > 0 && ovGenMs >= state.feedLatestGenMs)) {
+      const gen = (overview?.meta?.generated_at_bjt || "--").replace(" +08:00", " BJT");
+      $("meta-updated").textContent = `快照 ${gen.slice(5)}`;
+    }
+    state.lastFeedPollMs = Date.now();
 
     renderOverview();
     renderArb();
     renderFlows();
     renderLabs();
-    renderFeed();
+    ingestFeedData(feed, { notify: state.feedInitialized });
     renderLiveRibbon();
   }
 
@@ -1640,9 +2021,84 @@
       state.feedSearch = e.target.value;
       renderFeed();
     });
+    $("feed-alert-mode")?.addEventListener("click", (e) => {
+      const btn = e.target.closest(".seg-btn");
+      if (!btn) return;
+      const mode = btn.dataset.mode;
+      if (!["off", "chime", "tts"].includes(mode)) return;
+      state.feedAlertMode = mode;
+      safeStoreSet("danclub_feed_alert_mode", mode);
+      if (mode === "off") {
+        stopFeedSpeech();
+        updateFeedAlertUi();
+      } else if (mode === "chime") {
+        stopFeedSpeech();
+        playFeedChime(false, true);
+        updateFeedAlertUi("已开启快讯提示音 · 每45秒自动监测新快讯");
+      } else {
+        playFeedChime(false, true);
+        const sample = state.feed?.items?.[0]?.headline || "市场快讯中文语音播报已开启";
+        const ok = speakFeedHeadlines([sample]);
+        updateFeedAlertUi(
+          ok
+            ? "已开启中文语音播报 · 正在播报最新快讯"
+            : "当前浏览器不支持语音合成，已回退提示音提醒"
+        );
+      }
+    });
+    $("feed-alert-scope")?.addEventListener("click", (e) => {
+      const btn = e.target.closest(".seg-btn");
+      if (!btn) return;
+      const scope = btn.dataset.scope;
+      if (!["all", "major"].includes(scope)) return;
+      state.feedAlertScope = scope;
+      safeStoreSet("danclub_feed_alert_scope", scope);
+      updateFeedAlertUi();
+    });
+    $("btn-feed-test-sound")?.addEventListener("click", () => {
+      const isMajorPreview = state.feedAlertScope === "major";
+      playFeedChime(isMajorPreview, true);
+      if (state.feedAlertMode === "tts") {
+        const sample = state.feed?.items?.[0]?.headline || "丹俱乐部终端快讯语音播报已就绪";
+        const ok = speakFeedHeadlines([sample]);
+        updateFeedAlertUi(ok ? "试听中 · 中文语音播报已触发" : "已试听提示音（浏览器不支持语音合成）");
+      } else if (state.feedAlertMode === "off") {
+        updateFeedAlertUi("试听完成 · 当前为静音，切换提示音或语音播报后自动提醒");
+      } else {
+        updateFeedAlertUi(isMajorPreview ? "已试听重磅三连提示音 · 声音已就绪" : "已试听快讯提示音 · 声音已就绪");
+      }
+    });
+    $("btn-feed-show-en")?.addEventListener("click", () => {
+      state.feedShowEn = !state.feedShowEn;
+      safeStoreSet("danclub_feed_show_en", state.feedShowEn ? "1" : "0");
+      updateFeedAlertUi();
+      renderFeed();
+    });
     $("btn-refresh")?.addEventListener("click", () => {
       loadSnapshots().catch(console.error);
       fetchLiveCryptoTickers();
+    });
+
+    // Unlock Web Audio silently on first user interaction so background feed chimes play cleanly
+    const unlockOnce = () => {
+      if (state.feedAlertMode !== "off") {
+        ensureFeedAudioCtx(true);
+        if (state.feedAudioUnlocked) updateFeedAlertUi();
+      }
+      document.removeEventListener("pointerdown", unlockOnce, true);
+      document.removeEventListener("keydown", unlockOnce, true);
+    };
+    document.addEventListener("pointerdown", unlockOnce, true);
+    document.addEventListener("keydown", unlockOnce, true);
+
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden && Date.now() - state.lastFeedPollMs >= 15000) {
+        pollFeedLive();
+      }
+    });
+    window.addEventListener("pagehide", () => {
+      stopFeedSpeech();
+      try { state.feedPollAbortCtrl?.abort(); } catch {}
     });
 
     // Re-render active 1:1 SVG charts cleanly whenever viewport width changes
@@ -1667,6 +2123,9 @@
     }
     fetchLiveCryptoTickers();
     state.liveTimer = window.setInterval(fetchLiveCryptoTickers, 5000);
+    state.feedPollTimer = window.setInterval(() => {
+      if (!document.hidden) pollFeedLive();
+    }, 45000);
   }
 
   boot();

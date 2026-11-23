@@ -400,6 +400,9 @@ a:hover {
 }
 
 .nav-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   border: 0;
   background: transparent;
   color: var(--muted);
@@ -410,6 +413,27 @@ a:hover {
   white-space: nowrap;
   border-bottom: 2px solid transparent;
   transition: color 0.15s, border-color 0.15s;
+}
+
+.nav-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--risk);
+  color: #ffffff;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.nav-badge[hidden] {
+  display: none;
 }
 
 .nav-tab:hover {
@@ -1227,6 +1251,73 @@ a:hover {
   gap: 8px;
   align-items: center;
   flex-wrap: wrap;
+}
+
+.feed-alert-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 11px;
+  margin-bottom: 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+}
+
+.feed-alert-group,
+.feed-alert-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.feed-alert-label {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.feed-alert-status {
+  font-size: 11px;
+  font-family: var(--mono);
+  color: var(--muted);
+}
+
+.btn-toggle-active {
+  border-color: var(--accent-border);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.pill-tr {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid var(--accent-border);
+}
+
+.feed-new-pill {
+  background: var(--risk);
+  color: #ffffff;
+  font-weight: 700;
+}
+
+.feed-en-sub {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--line);
+  font-size: 11.5px;
+  color: var(--muted);
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.feed-item.is-fresh {
+  border-color: var(--accent-border);
+  background: linear-gradient(90deg, var(--accent-soft), var(--surface-2) 52%);
 }
 
 .search-input {
@@ -2389,6 +2480,8 @@ a:hover {
   .miner-box { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .bottom-item { grid-template-columns: 1fr; gap: 5px; }
   .search-input { min-width: 0; width: 100%; }
+  .feed-alert-bar { padding: 8px 9px; gap: 7px; }
+  .feed-alert-status { flex-basis: 100%; }
   .api-row { flex-wrap: wrap; }
   .api-desc { white-space: normal; }
   .hide-sm { display: none; }

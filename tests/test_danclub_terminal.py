@@ -755,6 +755,141 @@ class TestExporterIntegrityAndHygiene(unittest.TestCase):
             self.assertEqual(p_mm["entry_px"], 0.00006)
             self.assertEqual(p_mm["upnl"], 40000.0)
 
+    def test_english_feed_translation_cache_and_alert_ui(self) -> None:
+        # 1. Language detector: English-only & mostly-English -> True; Chinese with tickers -> False
+        self.assertTrue(syncer._needs_zh_translation("Federal Reserve Chair says rate cuts remain data dependent"))
+        self.assertTrue(syncer._needs_zh_translation("【美股】US Treasury Secretary announces fresh semiconductor tariff guidance"))
+        self.assertFalse(syncer._needs_zh_translation("比特币 BTC 突破 10 万美元，ETF 单日净流入 5.2 亿美元"))
+        self.assertFalse(syncer._needs_zh_translation("币安理财 Simple Earn 推出 USDT 活期高息活动最高享 18% APR"))
+        self.assertFalse(syncer._needs_zh_translation("BTC +3%"))
+
+        # 2. Validator rejects garbage / error banners / non-CJK output
+        self.assertEqual(syncer._valid_zh_result("MYMEMORY WARNING: YOU USED ALL AVAILABLE FREE TRANSLATIONS"), "")
+        self.assertEqual(syncer._valid_zh_result("Only English text returned"), "")
+        self.assertEqual(syncer._valid_zh_result("美联储主席表示降息仍取决于经济数据"), "美联储主席表示降息仍取决于经济数据")
+
+        # 3. Persistent cache, headline_en preservation, garbage rejection, and 2nd-run cache hit
+        with tempfile.TemporaryDirectory() as td:
+            cache_file = Path(td) / "zh_cache.json"
+            calls: list[list[str]] = []
+
+            def fake_translator(texts: list[str]) -> list[str]:
+                calls.append(list(texts))
+                mapping = {
+                    "Federal Reserve holds interest rates steady amid sticky inflation": "美联储因通胀粘性维持利率不变",
+                    "Binance launches zero-fee trading campaign for spot pairs": "币安推出多币种现货零手续费交易活动",
+                    "Unknown wire returning error text": "MYMEMORY WARNING: QUOTA EXCEEDED",
+                }
+                return [mapping.get(t, "") for t in texts]
+
+            def make_bundle() -> dict:
+                return {
+                    "feed": {
+                        "items": [
+                            {
+                                "id": 101,
+                                "ts": 1795430000,
+                                "headline": "Federal Reserve holds interest rates steady amid sticky inflation",
+                                "body": "",
+                                "cat_code": "MACRO",
+                            },
+                            {
+                                "id": 102,
+                                "ts": 1795429900,
+                                "headline": "比特币现货 ETF 连续三日净流入",
+                                "body": "",
+                                "cat_code": "CRYPTO",
+                            },
+                            {
+                                "id": 103,
+                                "ts": 1795429800,
+                                "headline": "Unknown wire returning error text",
+                                "body": "",
+                                "cat_code": "CRYPTO",
+                            },
+                        ]
+                    },
+                    "labs": {
+                        "exchange_promos": [
+                            {"exchange": "Binance", "title": "Binance launches zero-fee trading campaign for spot pairs"}
+                        ]
+                    },
+                }
+
+            b1 = make_bundle()
+            applied1 = syncer.translate_english_feed_items(b1, cache_path=cache_file, translator=fake_translator)
+            self.assertEqual(applied1, 2)
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(b1["feed"]["items"][0]["headline"], "美联储因通胀粘性维持利率不变")
+            self.assertEqual(
+                b1["feed"]["items"][0]["headline_en"],
+                "Federal Reserve holds interest rates steady amid sticky inflation",
+            )
+            # Chinese item untouched, no headline_en added
+            self.assertEqual(b1["feed"]["items"][1]["headline"], "比特币现货 ETF 连续三日净流入")
+            self.assertNotIn("headline_en", b1["feed"]["items"][1])
+            # Failed/bad translation leaves English intact rather than polluting with warning text
+            self.assertEqual(b1["feed"]["items"][2]["headline"], "Unknown wire returning error text")
+            self.assertEqual(b1["labs"]["exchange_promos"][0]["title"], "币安推出多币种现货零手续费交易活动")
+            self.assertTrue(cache_file.exists())
+
+            # Second run should hit disk cache for the 2 cached items and only ask translator for the uncached failed one
+            b2 = make_bundle()
+            applied2 = syncer.translate_english_feed_items(b2, cache_path=cache_file, translator=fake_translator)
+            self.assertEqual(applied2, 2)
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(calls[1], ["Unknown wire returning error text"])
+            self.assertEqual(b2["feed"]["items"][0]["headline"], "美联储因通胀粘性维持利率不变")
+
+            # 3b. Pre-egress privacy check: blocklisted / email text NEVER sent to external translator
+            bl = Path(td) / "blocklist.txt"
+            bl.write_text("TopSecretCodename\n", encoding="utf-8")
+            bl.chmod(0o600)
+            egress_seen: list[str] = []
+
+            def spy_translator(texts: list[str]) -> list[str]:
+                egress_seen.extend(texts)
+                return ["译文正常通过校验" for _ in texts]
+
+            b_priv = {
+                "feed": {
+                    "items": [
+                        {"id": 201, "ts": 1795430000, "headline": "Project TopSecretCodename launches institutional vault today"},
+                        {"id": 202, "ts": 1795430001, "headline": "Contact fake.trader@gmail.com for treasury wire details"},
+                        {"id": 203, "ts": 1795430002, "headline": "Ethereum developers finalize next mainnet upgrade timeline"},
+                    ]
+                },
+                "labs": {"exchange_promos": []},
+            }
+            syncer.translate_english_feed_items(
+                b_priv,
+                cache_path=Path(td) / "priv_cache.json",
+                translator=spy_translator,
+                blocklist_path=bl,
+                require_blocklist=True,
+            )
+            self.assertEqual(egress_seen, ["Ethereum developers finalize next mainnet upgrade timeline"])
+
+            # 3c. Over-length MyMemory fallback refuses silent truncation
+            self.assertEqual(syncer._translate_single_mymemory("A" * 265), "")
+
+        # 4. Frontend feed alert controls, timestamp guard & escaping sanity check
+        html = (ROOT / "site" / "index.html").read_text(encoding="utf-8")
+        app_js = (ROOT / "site" / "assets" / "app.js").read_text(encoding="utf-8")
+        for needle in ('id="nav-feed-badge"', 'id="feed-alert-mode"', 'id="feed-alert-scope"', 'id="btn-feed-test-sound"', 'id="btn-feed-show-en"'):
+            self.assertIn(needle, html)
+        for needle in (
+            "playFeedChime",
+            "speakFeedHeadlines",
+            "pollFeedLive",
+            "ingestFeedData",
+            "validFeedTs",
+            "parseSnapshotGenMs",
+            "feedPrevSnapshotKeys",
+            "esc(it.headline_en)",
+        ):
+            self.assertIn(needle, app_js)
+
 
 if __name__ == "__main__":
     unittest.main()
