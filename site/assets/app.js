@@ -15,9 +15,11 @@
     activeSpreadRange: "24h",
     activeCsiCode: "ALL",
     activeEtfAsset: "BTC",
+    activePromoCat: "ALL",
     activeFeedCat: "ALL",
     feedSearch: "",
     liveCrypto: {},
+    liveBstocks: {},
     prevLivePrice: {},
     liveTimer: null,
     resizeTimer: null,
@@ -104,6 +106,7 @@
   };
 
   const sessionZh = (sess) => {
+    if (sess === "BSTOCKS_247") return "bStocks";
     if (sess === "PRE") return "盘前";
     if (sess === "POST") return "盘后";
     if (sess === "CLOSED") return "休市";
@@ -545,13 +548,17 @@
     ["SPY", "QQQ", "NVDA", "MSTR", ".VIX", "US10Y", "XAU="].forEach((s) => {
       const hit = macro.find((m) => m.symbol === s);
       if (!hit || !Number.isFinite(Number(hit.price))) return;
+      const liveBs = hit.session === "BSTOCKS_247" ? state.liveBstocks[s] : null;
+      const pxVal = liveBs ? liveBs.price : Number(hit.price);
+      const chgVal = liveBs ? liveBs.chg_pct : hit.chg_pct;
       const prefix = s === ".VIX" || s === "US10Y" ? "" : "$";
       const suffix = s === "US10Y" ? "%" : "";
       macroPills.push({
         sym: s.replace("=", "").replace(".", ""),
-        px: `${prefix}${fmtNum(hit.price, s === "US10Y" ? 3 : 2)}${suffix}`,
-        chg: hit.chg_pct,
+        px: `${prefix}${fmtNum(pxVal, s === "US10Y" ? 3 : 2)}${suffix}`,
+        chg: chgVal,
         sess: sessionZh(hit.session),
+        isBstock: hit.session === "BSTOCKS_247",
         flash: "",
       });
     });
@@ -566,7 +573,7 @@
         p.chg !== null && p.chg !== undefined && Number.isFinite(Number(p.chg))
           ? `<span class="chg ${dirCls(p.chg)}">${fmtSignedPct(p.chg, 2)}</span>`
           : ""
-      }${p.sess ? `<span class="sess">${esc(p.sess)}</span>` : ""}</div>`;
+      }${p.sess ? `<span class="sess${p.isBstock ? " sess-bstock" : ""}">${esc(p.sess)}</span>` : ""}</div>`;
 
     ribbon.innerHTML =
       cryptoPills.map(renderPill).join("") +
@@ -831,15 +838,18 @@
     const all = ov.macro_quotes || [];
     const filtered = all.filter((m) => {
       if (state.activeMacroGroup === "ALL") return true;
-      const isEq = ["美股指数", "波动率", "算力存储", "币股"].includes(m.group);
+      const isEq = ["美股指数", "波动率", "算力存储", "币股", "科技巨头", "EQUITY"].includes(m.group);
       return state.activeMacroGroup === "EQUITY" ? isEq : !isEq;
     });
 
+    const hasBstocks = Boolean(ov.bstocks_active || all.some((m) => m.session === "BSTOCKS_247"));
     const anyClosed = all.some((m) => m.is_closed);
     if ($("macro-session-note")) {
-      $("macro-session-note").textContent = anyClosed
-        ? "美股当前处于休市/盘前时段：主涨跌幅为上一常规交易日真实收盘表现，拒绝 0.00% 死价误导。"
-        : "美股常规交易时段实时更新，并附带距 52 周高点回撤深度。";
+      $("macro-session-note").textContent = hasBstocks
+        ? "美股休市/盘外时段自动以币安现货 bStocks (24/7) 实时报价为主，下方保留官方上一常规盘昨收对照。"
+        : anyClosed
+          ? "美股当前处于休市/盘前时段：主涨跌幅为上一常规交易日真实收盘表现，拒绝 0.00% 死价误导。"
+          : "美股常规交易时段实时更新，并附带距 52 周高点回撤深度。";
     }
 
     $("macro-grid").innerHTML = filtered
@@ -847,21 +857,27 @@
         const prefix = [".VIX", "US10Y", ".DXY", "JPY=", "CNH="].includes(m.symbol) ? "" : "$";
         const suffix = m.symbol === "US10Y" ? "%" : "";
         const dec = m.symbol === "US10Y" ? 3 : m.symbol === "CNH=" ? 4 : 2;
-        const sTag = sessionZh(m.session);
-        const hasExt = m.ext_px !== null && m.ext_px !== undefined && m.ext_chg !== null && m.ext_chg !== undefined;
+        const isBs = m.session === "BSTOCKS_247";
+        const liveBs = isBs ? state.liveBstocks[m.symbol] : null;
+        const pxVal = liveBs ? liveBs.price : m.price;
+        const chgVal = liveBs ? liveBs.chg_pct : m.chg_pct;
+        const sTag = isBs ? "bStocks 24/7" : sessionZh(m.session);
+        const hasExt = !isBs && m.ext_px !== null && m.ext_px !== undefined && m.ext_chg !== null && m.ext_chg !== undefined;
+        const hasRegRef = isBs && m.reg_px !== null && m.reg_px !== undefined;
         return `
         <div class="macro-tile">
           <div class="macro-left">
             <div class="macro-sym-row">
               <span class="macro-sym">${esc(m.symbol.replace("=", "").replace(".", ""))}</span>
-              ${sTag ? `<span class="sess-tag">${esc(sTag)}</span>` : ""}
+              ${sTag ? `<span class="sess-tag${isBs ? " sess-bstock" : ""}">${esc(sTag)}</span>` : ""}
             </div>
             <div class="macro-name">${esc(m.name)}</div>
             ${m.dd_pct !== null && m.dd_pct !== undefined ? `<div class="macro-dd">距52W高 ${fmtNum(m.dd_pct, 1)}%</div>` : ""}
           </div>
           <div class="macro-right">
-            <div class="macro-px">${prefix}${fmtNum(m.price, dec)}${suffix}</div>
-            <div class="macro-chg ${dirCls(m.chg_pct)}">${m.chg_pct !== null && m.chg_pct !== undefined ? fmtSignedPct(m.chg_pct, 2) : "--"}</div>
+            <div class="macro-px">${prefix}${fmtNum(pxVal, dec)}${suffix}</div>
+            <div class="macro-chg ${dirCls(chgVal)}">${chgVal !== null && chgVal !== undefined ? fmtSignedPct(chgVal, 2) : "--"}</div>
+            ${hasRegRef ? `<div class="macro-ext">昨收 $${fmtNum(m.reg_px, 2)}${m.reg_chg_pct != null ? ` (${fmtSignedPct(m.reg_chg_pct, 1)})` : ""}</div>` : ""}
             ${hasExt ? `<div class="macro-ext">${esc(sTag)} ${fmtSignedPct(m.ext_chg, 2)}</div>` : ""}
           </div>
         </div>`;
@@ -1266,18 +1282,37 @@
       )
       .join("");
 
-    // Curated Active Exchange Promos
+    // Curated Active Exchange Promos & Live Earn/Airdrop Radar (filterable!)
     const promos = labs.exchange_promos || [];
-    $("promo-grid").innerHTML = promos.length
-      ? promos
+    const pCounts = { ALL: promos.length, HIGH_YIELD: 0, AIRDROP: 0, CAMPAIGN: 0, WARN: 0 };
+    promos.forEach((p) => {
+      const ec = p.earn_cat || (p.tier === "WARN" ? "WARN" : "CAMPAIGN");
+      if (pCounts[ec] !== undefined) pCounts[ec] += 1;
+    });
+    const pLabels = { ALL: "全部", HIGH_YIELD: "高息理财", AIRDROP: "空投·打新", CAMPAIGN: "常规活动", WARN: "慎防反撸" };
+    $("promo-cat-filter")?.querySelectorAll(".seg-btn").forEach((btn) => {
+      const c = btn.dataset.cat;
+      btn.textContent = `${pLabels[c] || c} (${pCounts[c] ?? 0})`;
+    });
+    const visiblePromos = promos.filter((p) => {
+      if (state.activePromoCat === "ALL") return true;
+      const ec = p.earn_cat || (p.tier === "WARN" ? "WARN" : "CAMPAIGN");
+      return ec === state.activePromoCat;
+    });
+
+    $("promo-grid").innerHTML = visiblePromos.length
+      ? visiblePromos
           .map((p) => {
             const href = safeHref(p.url);
-            const tierCls = p.tier === "WARN" ? "pill-warn" : p.tier === "HIGH" ? "pill-ok" : "pill-muted";
+            const ec = p.earn_cat || (p.tier === "WARN" ? "WARN" : "CAMPAIGN");
+            const tierCls =
+              ec === "WARN" ? "pill-warn" : ec === "HIGH_YIELD" ? "pill-ok" : ec === "AIRDROP" ? "pill-cushion" : "pill-muted";
+            const badgeText = p.earn_cat_label || p.tier_label || p.worth_level;
             return `
           <article class="promo-card">
             <div class="promo-top">
               <span class="pill pill-info">${esc(p.exchange)}</span>
-              <span class="pill ${tierCls}">${esc(p.tier_label || p.worth_level)}</span>
+              <span class="pill ${tierCls}">${esc(badgeText)}</span>
             </div>
             <div class="promo-title">${
               href
@@ -1292,17 +1327,26 @@
           </article>`;
           })
           .join("")
-      : `<div class="muted small">当前暂无符合在期低风险标准的公开活动</div>`;
+      : `<div class="muted small">当前分类暂无在期理财或羊毛活动</div>`;
   }
 
   function renderFeed() {
     const items = state.feed?.items || [];
-    // Update live category counts in filter pills
-    const counts = { ALL: items.length, 秒级快讯: 0, 交易所公告: 0, 情报预警: 0 };
+    // Update live 6-category counts in filter pills
+    const counts = { ALL: items.length, CRYPTO: 0, MACRO: 0, LISTING: 0, EARN: 0, MOVES: 0, INTEL: 0 };
     items.forEach((it) => {
-      if (counts[it.category] !== undefined) counts[it.category] += 1;
+      const cc = it.cat_code || "CRYPTO";
+      if (counts[cc] !== undefined) counts[cc] += 1;
     });
-    const labels = { ALL: "全部", 秒级快讯: "市场快讯", 交易所公告: "交易所公告", 情报预警: "情报预警" };
+    const labels = {
+      ALL: "全部",
+      CRYPTO: "加密快讯",
+      MACRO: "美股·宏观",
+      LISTING: "上新·公告",
+      EARN: "理财·羊毛",
+      MOVES: "异动·OI",
+      INTEL: "深度预警",
+    };
     $("feed-cat-filter")?.querySelectorAll(".seg-btn").forEach((btn) => {
       const c = btn.dataset.cat;
       btn.textContent = `${labels[c] || c} (${counts[c] ?? 0})`;
@@ -1310,24 +1354,36 @@
 
     const q = state.feedSearch.trim().toLowerCase();
     const filtered = items.filter((it) => {
-      if (state.activeFeedCat !== "ALL" && it.category !== state.activeFeedCat) return false;
-      if (q && !`${it.headline} ${it.source} ${it.impact_label} ${it.market_ref} ${it.body}`.toLowerCase().includes(q)) return false;
+      const cc = it.cat_code || "CRYPTO";
+      if (state.activeFeedCat !== "ALL" && cc !== state.activeFeedCat) return false;
+      if (q && !`${it.headline} ${it.source} ${it.category} ${it.impact_label} ${it.market_ref} ${it.body} ${(it.coins || []).join(" ")}`.toLowerCase().includes(q)) return false;
       return true;
     });
 
-    const catZh = (c) => (c === "秒级快讯" ? "快讯" : c);
+    const catPillCls = (cc, level) => {
+      if (cc === "INTEL" || level === "major") return "pill-risk";
+      if (cc === "EARN") return "pill-ok";
+      if (cc === "MACRO") return "pill-warn";
+      if (cc === "MOVES") return "pill-violet";
+      if (cc === "LISTING") return "pill-cushion";
+      return "pill-info";
+    };
+
     $("feed-list").innerHTML = filtered.length
       ? filtered
           .map((it) => {
             const tone = it.impact_tone || "neutral";
             const impCls =
               tone === "bearish" ? "pill-risk" : tone === "bullish" ? "pill-ok" : tone === "warn" ? "pill-warn" : "pill-muted";
+            const cc = it.cat_code || "CRYPTO";
+            const href = safeHref(it.url);
             return `
         <article class="feed-item tone-${esc(tone)}">
           <div class="feed-meta">
-            <span class="pill ${it.level === "major" ? "pill-risk" : "pill-info"}">${esc(catZh(it.category))}</span>
+            <span class="pill ${catPillCls(cc, it.level)}">${esc(it.category || labels[cc] || "快讯")}</span>
             ${it.source ? `<span class="pill pill-muted">${esc(it.source)}</span>` : ""}
             <span class="mono">${esc((it.dt_bjt || "").slice(5, 16))}</span>
+            ${href ? `<a class="feed-ext-link" href="${esc(href)}" target="_blank" rel="noopener noreferrer">原文 ↗</a>` : ""}
           </div>
           <div class="feed-headline">${esc(it.headline)}</div>
           ${it.body ? `<div class="muted small" style="margin-top:4px;">${esc(it.body)}</div>` : ""}
@@ -1408,11 +1464,14 @@
     else if (state.activeTab === "labs") renderLabs();
   }
 
-  /* ---------- Live Browser-Side Crypto Tickers (Zero Freeze Bug!) ---------- */
+  /* ---------- Live Browser-Side Crypto + Binance Spot bStocks Tickers (Zero 451 Geo-Block!) ---------- */
   async function fetchLiveCryptoTickers() {
     try {
+      const syms = encodeURIComponent(
+        JSON.stringify(["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "SPYBUSDT", "QQQBUSDT", "NVDABUSDT", "MSTRBUSDT"])
+      );
       const [bnRes, hlRes] = await Promise.allSettled([
-        fetch("https://api.binance.com/api/v3/ticker/24hr?symbols=%5B%22BTCUSDT%22,%22ETHUSDT%22,%22BNBUSDT%22,%22SOLUSDT%22%5D", {
+        fetch(`https://data-api.binance.vision/api/v3/ticker/24hr?symbols=${syms}`, {
           signal: AbortSignal.timeout(4500),
         }),
         fetch("https://api.hyperliquid.xyz/info", {
@@ -1425,15 +1484,23 @@
 
       const bnFresh = new Set();
       let gotLive = false;
+      const bstockMap = { SPYBUSDT: "SPY", QQQBUSDT: "QQQ", NVDABUSDT: "NVDA", MSTRBUSDT: "MSTR" };
 
       if (bnRes.status === "fulfilled" && bnRes.value.ok) {
         const arr = await bnRes.value.json();
         if (Array.isArray(arr)) {
           arr.forEach((it) => {
-            const sym = String(it.symbol || "").replace("USDT", "");
+            const rawSym = String(it.symbol || "");
             const px = Number(it.lastPrice);
             const chg = Number(it.priceChangePercent);
-            if (sym && Number.isFinite(px) && px > 0) {
+            if (!Number.isFinite(px) || px <= 0) return;
+            if (bstockMap[rawSym]) {
+              state.liveBstocks[bstockMap[rawSym]] = { price: px, chg_pct: Number.isFinite(chg) ? chg : null };
+              gotLive = true;
+              return;
+            }
+            const sym = rawSym.replace("USDT", "");
+            if (sym) {
               state.liveCrypto[sym] = { price: px, chg_pct: Number.isFinite(chg) ? chg : null };
               bnFresh.add(sym);
               gotLive = true;
@@ -1553,6 +1620,13 @@
       state.activeEtfAsset = btn.dataset.asset;
       $("etf-asset-tabs").querySelectorAll(".seg-btn").forEach((b) => b.classList.toggle("active", b === btn));
       renderFlows();
+    });
+    $("promo-cat-filter")?.addEventListener("click", (e) => {
+      const btn = e.target.closest(".seg-btn");
+      if (!btn) return;
+      state.activePromoCat = btn.dataset.cat;
+      $("promo-cat-filter").querySelectorAll(".seg-btn").forEach((b) => b.classList.toggle("active", b === btn));
+      renderLabs();
     });
     $("feed-cat-filter")?.addEventListener("click", (e) => {
       const btn = e.target.closest(".seg-btn");

@@ -65,6 +65,15 @@
             浅色
           </button>
           <a
+            class="btn btn-compact btn-qq-group"
+            href="https://qm.qq.com/q/ZHFHZujCak"
+            target="_blank"
+            rel="noopener noreferrer"
+            title="点击加入 QQ 群【抱团取暖打气群】"
+          >
+            抱团打气群
+          </a>
+          <a
             class="btn btn-compact btn-accent-ghost"
             href="https://github.com/danclub-open/danclub-terminal"
             target="_blank"
@@ -81,7 +90,7 @@
           <button class="nav-tab" data-tab="overview" type="button">总览</button>
           <button class="nav-tab" data-tab="arb" type="button">跨市场套利</button>
           <button class="nav-tab" data-tab="flows" type="button">资金流与杠杆</button>
-          <button class="nav-tab" data-tab="labs" type="button">模拟盘与活动</button>
+          <button class="nav-tab" data-tab="labs" type="button">理财羊毛 · 模拟盘</button>
           <button class="nav-tab" data-tab="feed" type="button">市场快讯</button>
           <button class="nav-tab" data-tab="open" type="button">开放 API</button>
         </nav>
@@ -243,11 +252,15 @@
               <option value="4">🇬🇧 英 · 火星战争使者 (24s)</option>
             </select>
             <button class="btn btn-compact" id="btn-war-next-track" type="button" title="切换下一首高潮战歌">切歌 ⏭</button>
+            <label class="btn btn-compact war-local-btn" title="纯本地挂载任意 MP3 战歌，绝不上传服务器">
+              + 本地战歌
+              <input id="war-local-file" type="file" accept="audio/*" hidden />
+            </label>
             <label class="war-vol-wrap" title="调节战歌与空战音效音量">
               <span class="muted small">音量</span>
               <input class="war-vol-slider" id="war-vol" type="range" min="0" max="100" value="75" aria-label="战歌音量" />
             </label>
-            <span class="war-now-playing mono small muted" id="war-audio-status">5 首多国交响战歌高潮待命 · 自动轮播</span>
+            <span class="war-now-playing mono small muted" id="war-audio-status">战歌默认开启 · 点击页面任意处即刻燃起</span>
           </div>
 
           <!-- Battle Power Bar -->
@@ -346,7 +359,8 @@
                 <button class="seg-btn" data-side="LONG" type="button">多军</button>
                 <button class="seg-btn" data-side="SHORT" type="button">空军</button>
               </div>
-              <input class="search-input" id="war-fleet-search" type="search" placeholder="筛选代号 / 地址 / 币种…" />
+              <button class="btn btn-compact" id="btn-war-x-only" type="button" title="仅筛选已关联公开 X (Twitter) 账号的实盘巨鲸">𝕏 有X账号</button>
+              <input class="search-input" id="war-fleet-search" type="search" placeholder="筛选代号 / @X / 地址 / 币种…" />
             </div>
           </div>
           <div class="table-wrap">
@@ -576,8 +590,28 @@
         </article>
       </section>
 
-      <!-- TAB 4: LABS & PROMOS -->
+      <!-- TAB 5: EARN & YIELD PROMOS + PAPER LABS -->
       <section class="tab-panel" id="tab-labs">
+        <article class="card">
+          <div class="card-head wrap-head">
+            <div>
+              <p class="eyebrow">LIVE EARN · AIRDROP · ANTI-RUG RADAR</p>
+              <h2>精选在期高息理财与撸毛清单（融合 EQN 实时提醒）</h2>
+            </div>
+            <div class="seg-group seg-sm" id="promo-cat-filter">
+              <button class="seg-btn active" data-cat="ALL" type="button">全部</button>
+              <button class="seg-btn" data-cat="HIGH_YIELD" type="button">高息理财</button>
+              <button class="seg-btn" data-cat="AIRDROP" type="button">空投·打新</button>
+              <button class="seg-btn" data-cat="CAMPAIGN" type="button">常规活动</button>
+              <button class="seg-btn" data-cat="WARN" type="button">慎防反撸</button>
+            </div>
+          </div>
+          <p class="card-note">
+            实时聚合 Binance / OKX / Bybit / Bitget 活期高息、Alpha 积分空投、代币化股票理财与打新活动；自动剔除过期项与返佣参数，显式标注刷量反撸陷阱。
+          </p>
+          <div class="promo-grid" id="promo-grid"></div>
+        </article>
+
         <article class="card">
           <div class="card-head wrap-head">
             <div>
@@ -604,33 +638,25 @@
             </table>
           </div>
         </article>
-
-        <article class="card">
-          <div class="card-head wrap-head">
-            <div>
-              <p class="eyebrow">CURATED PUBLIC EXCHANGE PROMOS</p>
-              <h2>精选在期交易所活动与防反撸清单</h2>
-            </div>
-            <span class="muted small">自动剔除过期项 · 剥离返佣邀请参数</span>
-          </div>
-          <div class="promo-grid" id="promo-grid"></div>
-        </article>
       </section>
 
-      <!-- TAB 5: HIGH-SIGNAL WIRE -->
+      <!-- TAB 6: MULTI-SOURCE MARKET WIRE -->
       <section class="tab-panel" id="tab-feed">
         <article class="card">
           <div class="card-head wrap-head">
             <div>
-              <p class="eyebrow">CURATED MARKET WIRE</p>
-              <h2>高信噪比公开快讯与交易所公告</h2>
+              <p class="eyebrow">MULTI-SOURCE MARKET WIRE · EQN + GLOBAL</p>
+              <h2>多源分类实时快讯（融合方程式新闻 EQN）</h2>
             </div>
             <div class="feed-controls">
               <div class="seg-group seg-sm" id="feed-cat-filter">
                 <button class="seg-btn active" data-cat="ALL" type="button">全部</button>
-                <button class="seg-btn" data-cat="秒级快讯" type="button">市场快讯</button>
-                <button class="seg-btn" data-cat="交易所公告" type="button">交易所公告</button>
-                <button class="seg-btn" data-cat="情报预警" type="button">情报预警</button>
+                <button class="seg-btn" data-cat="CRYPTO" type="button">加密快讯</button>
+                <button class="seg-btn" data-cat="MACRO" type="button">美股·宏观</button>
+                <button class="seg-btn" data-cat="LISTING" type="button">上新·公告</button>
+                <button class="seg-btn" data-cat="EARN" type="button">理财·羊毛</button>
+                <button class="seg-btn" data-cat="MOVES" type="button">异动·OI</button>
+                <button class="seg-btn" data-cat="INTEL" type="button">深度预警</button>
               </div>
               <input
                 class="search-input"
@@ -691,7 +717,7 @@
               <span class="pill pill-info">CORS *</span>
             </div>
             <p class="card-note">
-              全部接口为静态托管只读 JSON，无需 API Key，可直接接入量化脚本、Bot、Excel 或 Notion。
+              全部接口为静态托管只读 JSON，无需 API Key，支持 <code>CORS *</code>，可直接接入量化脚本、Bot、AI Agent、Excel 或 Notion。高速主站每 3 分钟同步，GitHub Pages 镜像每 15 分钟同步，完整 Schema 与 Python / Node.js 接入示例见仓库 <code>docs/API.md</code> 与 <code>examples/</code>。
             </p>
             <div class="api-list" id="api-list"></div>
             <pre class="code-box" id="api-preview">点击上方任一接口的「试调」，查看实时 JSON 返回结构…</pre>
@@ -706,7 +732,10 @@
       <div class="wd-head">
         <div>
           <p class="eyebrow">WHALE ENTITY DOSSIER</p>
-          <h3 id="wd-title">--</h3>
+          <div class="wd-title-row">
+            <h3 id="wd-title">--</h3>
+            <span id="wd-x-badge"></span>
+          </div>
           <p class="muted small mono" id="wd-sub">--</p>
         </div>
         <button class="btn btn-compact" id="wd-close" type="button">关闭</button>

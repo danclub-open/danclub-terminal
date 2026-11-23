@@ -25,6 +25,8 @@ import sys
 import tarfile
 import tempfile
 import time
+import urllib.request
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -33,6 +35,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from privacy_guard import (  # noqa: E402
+    ALLOWED_NEWS_DOMAINS,
     ALLOWED_PROMO_DOMAINS,
     PrivacyViolationError,
     assert_clean_payload,
@@ -40,6 +43,27 @@ from privacy_guard import (  # noqa: E402
     sanitize_text,
 )
 from whale_public_exporter import empty_whales_payload, export_whales  # noqa: E402
+
+BJT = timezone(timedelta(hours=8))
+
+# Official Binance Spot bStocks (*BUSDT) mapping for 24/7 US equity pricing during NYSE/Nasdaq off-hours
+BSTOCK_SYMBOL_MAP: dict[str, tuple[str, str]] = {
+    "SPY": ("SPYBUSDT", "标普500 ETF"),
+    "QQQ": ("QQQBUSDT", "纳指100 ETF"),
+    "NVDA": ("NVDABUSDT", "英伟达"),
+    "MU": ("MUBUSDT", "美光科技"),
+    "SNDK": ("SNDKBUSDT", "闪迪 SanDisk"),
+    "MSTR": ("MSTRBUSDT", "Strategy"),
+    "COIN": ("COINBUSDT", "Coinbase"),
+    "CRCL": ("CRCLBUSDT", "Circle"),
+    "HOOD": ("HOODBUSDT", "Robinhood"),
+    "TSLA": ("TSLABUSDT", "特斯拉"),
+    "AAPL": ("AAPLBUSDT", "苹果"),
+    "GOOGL": ("GOOGLBUSDT", "谷歌"),
+    "TSM": ("TSMBUSDT", "台积电"),
+    "ANTB": ("ANTBUSDT", "Anthropic bStock"),
+}
+BSTOCK_EXTRA_ORDER: tuple[str, ...] = ("TSLA", "AAPL", "GOOGL", "TSM", "ANTB")
 
 SITE_DIR = REPO_ROOT / "site"
 API_DIR = SITE_DIR / "api" / "v1"
@@ -82,6 +106,349 @@ def _redact_repo_url(url: str) -> str:
     except ValueError:
         pass
     return re.sub(r"(https?://)[^/@\s]+@", r"\1***@", url)
+
+
+def _http_get_json(url: str, *, timeout: int = 8, max_bytes: int = 2 * 1024 * 1024) -> Any:
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "DanClubTerminalSync/1.0 (https://github.com/danclub-open/danclub-terminal)",
+            "Accept": "application/json",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        raw = resp.read(max_bytes + 1)
+        if len(raw) > max_bytes:
+            raise ValueError(f"HTTP 响应体积超限: {url}")
+        return json.loads(raw.decode("utf-8"))
+
+
+def fetch_binance_bstocks(timeout: int = 8) -> dict[str, dict[str, Any]]:
+    """Fetch 24/7 Binance Spot bStocks (*BUSDT) prices from data-api.binance.vision (fail-soft)."""
+    wanted_pairs = {pair: sym for sym, (pair, _) in BSTOCK_SYMBOL_MAP.items()}
+    try:
+        rows = _http_get_json(
+            "https://data-api.binance.vision/api/v3/ticker/24hr",
+            timeout=timeout,
+            max_bytes=4 * 1024 * 1024,
+        )
+    except Exception:
+        return {}
+    if not isinstance(rows, list):
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        pair = str(r.get("symbol") or "")
+        sym = wanted_pairs.get(pair)
+        if not sym:
+            continue
+        try:
+            px = float(r.get("lastPrice") or 0)
+            chg = float(r.get("priceChangePercent") or 0)
+            vol = float(r.get("quoteVolume") or 0)
+        except (TypeError, ValueError):
+            continue
+        if px > 0 and vol >= 10_000:
+            out[sym] = {
+                "bstock_symbol": pair,
+                "price": round(px, 4 if px < 10 else 2),
+                "chg_pct": round(chg, 2),
+                "vol_usd": round(vol, 0),
+            }
+    return out
+
+
+def apply_bstocks_overlay(bundle: dict[str, Any], bstocks: dict[str, dict[str, Any]]) -> None:
+    """Promote Binance Spot bStocks 24/7 quotes as primary price during US equity off-hours."""
+    if not bstocks:
+        return
+    ov = bundle.get("overview")
+    if not isinstance(ov, dict):
+        return
+    quotes = ov.get("macro_quotes")
+    if not isinstance(quotes, list):
+        return
+    now_ts = int(time.time())
+    existing_syms: set[str] = set()
+    any_promoted = False
+    equity_groups = {"美股指数", "算力存储", "币股", "科技巨头", "EQUITY"}
+    off_hours_sessions = {"CLOSED", "PRE", "POST"}
+    eq_sessions = [
+        str(q.get("session") or "").upper()
+        for q in quotes
+        if isinstance(q, dict) and str(q.get("group") or "") in equity_groups
+    ]
+    us_equity_all_off_hours = bool(eq_sessions) and all(s in off_hours_sessions for s in eq_sessions)
+
+    for q in quotes:
+        if not isinstance(q, dict):
+            continue
+        sym = str(q.get("symbol") or "")
+        existing_syms.add(sym)
+        bs = bstocks.get(sym)
+        if not bs or str(q.get("group") or "") not in equity_groups:
+            continue
+        q["bstock_symbol"] = bs["bstock_symbol"]
+        q["bstock_px"] = bs["price"]
+        q["bstock_chg_pct"] = bs["chg_pct"]
+        q["bstock_vol_usd"] = bs["vol_usd"]
+        sess_u = str(q.get("session") or "").upper()
+        # STRICT: Only promote Binance Spot bStocks when US equity is explicitly in CLOSED/PRE/POST off-hours!
+        if sess_u in off_hours_sessions:
+            if q.get("reg_px") is None and q.get("price") is not None:
+                q["reg_px"] = q["price"]
+            if q.get("reg_chg_pct") is None and q.get("chg_pct") is not None:
+                q["reg_chg_pct"] = q["chg_pct"]
+            q["price"] = bs["price"]
+            q["chg_pct"] = bs["chg_pct"]
+            q["session"] = "BSTOCKS_247"
+            q["is_closed"] = False
+            q["price_source"] = "BINANCE_BSTOCKS"
+            any_promoted = True
+
+    # Only append extra 24/7 bStocks cards (TSLA/AAPL/GOOGL/TSM/ANTB) when ALL tracked US equities are off-hours!
+    if us_equity_all_off_hours:
+        for sym in BSTOCK_EXTRA_ORDER:
+            if sym in existing_syms or sym not in bstocks:
+                continue
+            bs = bstocks[sym]
+            _, zh_name = BSTOCK_SYMBOL_MAP[sym]
+            quotes.append({
+                "symbol": sym,
+                "name": zh_name,
+                "group": "科技巨头",
+                "price": bs["price"],
+                "chg_pct": bs["chg_pct"],
+                "session": "BSTOCKS_247",
+                "is_closed": False,
+                "price_source": "BINANCE_BSTOCKS",
+                "bstock_symbol": bs["bstock_symbol"],
+                "bstock_px": bs["price"],
+                "bstock_chg_pct": bs["chg_pct"],
+                "bstock_vol_usd": bs["vol_usd"],
+                "reg_px": None,
+                "reg_chg_pct": None,
+                "ext_px": None,
+                "ext_chg": None,
+                "dd_pct": None,
+                "yrhi": None,
+                "ts": now_ts,
+            })
+            any_promoted = True
+    if any_promoted:
+        ov["bstocks_active"] = True
+
+
+def _norm_title_key(text: str) -> str:
+    return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", str(text or "").lower())[:32]
+
+
+def _classify_eqn_item(channels: list[str], text: str, src_name: str) -> tuple[str, str]:
+    chs = set(channels)
+    if "earn" in chs or ("alpha" in chs and re.search(r"(?:空投|积分|认购|奖励|Yield|APR|年化|理财|Simple\s*Earn|瓜分)", text, re.IGNORECASE)):
+        return "EARN", "理财·羊毛"
+    if chs & {"binance", "korea", "tier2", "tier3", "alpha"}:
+        return "LISTING", "上新·公告"
+    if chs & {"tradfi", "tfmoves"}:
+        return "MACRO", "美股·宏观"
+    if chs & {"oi", "pricechange"}:
+        return "MOVES", "异动·OI"
+    if re.search(r"(?:漏洞|被盗|黑客|攻击|抽走|SEC|证监会|破产|冻结)", text, re.IGNORECASE):
+        return "INTEL", "深度预警"
+    if re.search(r"(?:美股|美联储|CPI|非农|关税|英伟达|NVIDIA|特斯拉|纳指|标普|黄金|原油|伊朗)", text, re.IGNORECASE):
+        return "MACRO", "美股·宏观"
+    return "CRYPTO", "加密快讯"
+
+
+def _classify_earn_promo(title: str, summary: str, tier: str) -> tuple[str, str]:
+    txt = f"{title} {summary}"
+    if tier == "WARN" or re.search(r"(?:Trading\s+Competition|交易竞赛|刷量|交易量排名|反撸)", txt, re.IGNORECASE):
+        return "WARN", "慎防反撸"
+    if re.search(r"(?:Alpha\s*积分|空投|Airdrop|Pre-TGE|Launchpool|Megadrop|HODLer|打新|认购|领取\s*[\d,]+)", txt, re.IGNORECASE):
+        return "AIRDROP", "空投·打新"
+    if re.search(r"(?:APR|APY|年化|Simple\s*Earn|Yield\s*Arena|Hold\s*&\s*Earn|活期|理财|RWA|瓜分\s*[\d万亿]+|收益率)", txt, re.IGNORECASE):
+        return "HIGH_YIELD", "高息理财"
+    return "CAMPAIGN", "常规活动"
+
+
+def fetch_eqn_news_and_earn(timeout: int = 8) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Fetch categorized public market wires and live earn/airdrop promos from eqn.news (fail-soft)."""
+    queries = (
+        "main,tradfi,tfmoves,major,hl&limit=35",
+        "binance,korea,tier2,alpha&limit=25",
+        "earn,alpha&limit=24",
+        "oi&limit=16",
+    )
+    now_ts = int(time.time())
+    seen_ids: set[str] = set()
+    feed_items: list[dict[str, Any]] = []
+    earn_promos: list[dict[str, Any]] = []
+
+    for q in queries:
+        try:
+            data = _http_get_json(f"https://eqn.news/api/v1/news?ch={q}", timeout=timeout, max_bytes=512 * 1024)
+        except Exception:
+            continue
+        rows = data.get("items") if isinstance(data, dict) else None
+        if not isinstance(rows, list):
+            continue
+        for it in rows:
+            if not isinstance(it, dict):
+                continue
+            item_id = str(it.get("id") or it.get("no") or "")
+            if not item_id or item_id in seen_ids:
+                continue
+            seen_ids.add(item_id)
+
+            chs = [str(c) for c in (it.get("channels") or []) if c]
+            if "cz" in chs and len(chs) == 1:
+                continue  # Skip noisy single-channel Twitter replies
+
+            i18n = it.get("i18n") if isinstance(it.get("i18n"), dict) else {}
+            raw_text = str(i18n.get("zh") or i18n.get("en") or "").strip()
+            raw_text = re.sub(r"\s+", " ", raw_text).strip()
+            if not raw_text or len(raw_text) < 10:
+                continue
+            if re.search(r"https?://t\.co/", raw_text) and len(raw_text) < 40:
+                continue
+
+            try:
+                pub_raw = int(float(it.get("published_ts") or 0))
+            except (TypeError, ValueError, OverflowError):
+                continue
+            ts_sec = pub_raw // 1000 if pub_raw > 10_000_000_000 else pub_raw
+            if ts_sec <= 0 or ts_sec > now_ts + 3600 or (now_ts - ts_sec) > 7 * 86400:
+                continue
+            try:
+                dt_str = datetime.fromtimestamp(ts_sec, BJT).strftime("%Y-%m-%d %H:%M:%S")
+            except (ValueError, OSError, OverflowError):
+                continue
+
+            src_obj = it.get("source") if isinstance(it.get("source"), dict) else {}
+            src_name = str(src_obj.get("display_zh") or src_obj.get("display") or "方程式新闻").strip()[:36]
+            coins = [str(c.get("symbol"))[:16] for c in (it.get("coins") or []) if isinstance(c, dict) and c.get("symbol")][:4]
+            path = str(it.get("path") or "")
+            raw_url = str(it.get("url") or "").strip()
+            if raw_url.startswith("https://api.eqn.news/"):
+                raw_url = f"https://eqn.news{path}" if path.startswith("/") else "https://eqn.news/"
+            elif not raw_url and path.startswith("/"):
+                raw_url = f"https://eqn.news{path}"
+
+            cat_code, cat_label = _classify_eqn_item(chs, raw_text, src_name)
+            tone = "neutral"
+            if raw_text.startswith(("🟢", "📈")) or "反弹" in raw_text or "上涨" in raw_text or "空头回补" in raw_text:
+                tone = "bullish"
+            elif raw_text.startswith(("🔻", "🔴")) or "下跌" in raw_text or "漏洞" in raw_text or "抽走" in raw_text or "警示" in raw_text:
+                tone = "bearish"
+
+            clean_head = re.sub(r"^[🟢🔴🔻🔸⚡📢🔥\s]+", "", raw_text).strip()
+            feed_items.append({
+                "id": 0,
+                "ts": ts_sec,
+                "dt_bjt": dt_str,
+                "level": "major" if ("main" in chs or "major" in chs or "tfmoves" in chs) else "normal",
+                "cat_code": cat_code,
+                "category": cat_label,
+                "source": f"EQN · {src_name}" if "方程式" not in src_name else src_name,
+                "headline": clean_head[:180],
+                "impact_label": f"涉及 {' / '.join(coins)}" if coins else "",
+                "impact_tone": tone,
+                "market_ref": "",
+                "body": "",
+                "coins": coins,
+                "url": raw_url,
+            })
+
+            # Also extract actionable Earn & Alpha Airdrop items for the 理财羊毛 tab (within 6 days)
+            if (cat_code == "EARN" or "earn" in chs) and (now_ts - ts_sec) <= 6 * 86400:
+                if "请准备好领取币安 Alpha 空投" in clean_head or "返还款项" in clean_head or "全额返还" in clean_head:
+                    continue
+                exch = "Binance"
+                low_all = f"{src_name} {clean_head}".lower()
+                if "okx" in low_all:
+                    exch = "OKX"
+                elif "bybit" in low_all:
+                    exch = "Bybit"
+                elif "bitget" in low_all:
+                    exch = "Bitget"
+                elif "gate" in low_all:
+                    exch = "Gate"
+                elif "aster" in low_all:
+                    exch = "Aster"
+
+                tier = "HIGH" if re.search(r"(?:Simple\s*Earn|活期|Yield\s*Arena|Hold\s*&\s*Earn|Alpha\s*积分.*领取|瓜分)", clean_head, re.IGNORECASE) else "LOW_RISK"
+                earn_cat, earn_cat_label = _classify_earn_promo(clean_head, "", tier)
+                reward_m = re.search(r"(?:最高\s*[\d.]+%\s*(?:APR|APY|年化收益率?)|领取\s*[\d,]+\s*枚\s*[A-Z0-9]+|瓜分\s*[\d万亿.]+\s*[A-Z]+|[\d万亿.]+\s*[A-Z]+\s*奖励)", clean_head, re.IGNORECASE)
+                earn_promos.append({
+                    "exchange": exch,
+                    "tier": tier,
+                    "tier_label": earn_cat_label,
+                    "worth_level": earn_cat_label,
+                    "earn_cat": earn_cat,
+                    "earn_cat_label": earn_cat_label,
+                    "promo_type": "理财提醒" if "earn" in chs else "Alpha空投",
+                    "title": clean_head[:105],
+                    "reward": reward_m.group(0) if reward_m else "",
+                    "window": f"发布于 {dt_str[5:16]} BJT",
+                    "summary": clean_head[105:240].strip() if len(clean_head) > 105 else f"来源：EQN {src_name}（点击查看原文规则）",
+                    "url": raw_url,
+                    "created_at": ts_sec,
+                })
+
+    return feed_items, earn_promos
+
+
+def merge_eqn_into_bundle(
+    bundle: dict[str, Any],
+    eqn_feed: list[dict[str, Any]],
+    eqn_promos: list[dict[str, Any]],
+) -> None:
+    """Merge EQN wires & earn promos with deduplication and balanced category quotas."""
+    feed = bundle.get("feed")
+    if isinstance(feed, dict) and eqn_feed:
+        base_items = list(feed.get("items") or [])
+        seen_keys: set[str] = {_norm_title_key(it.get("headline", "")) for it in base_items if isinstance(it, dict)}
+        for it in eqn_feed:
+            k = _norm_title_key(it.get("headline", ""))
+            if not k or k in seen_keys:
+                continue
+            seen_keys.add(k)
+            base_items.append(it)
+        base_items.sort(key=lambda x: int(x.get("ts") or 0), reverse=True)
+        # Guarantee balanced representation across all 6 categories (up to 85 items total)
+        cat_caps = {"CRYPTO": 22, "MACRO": 16, "LISTING": 16, "EARN": 12, "MOVES": 10, "INTEL": 12}
+        cat_counts: dict[str, int] = {}
+        balanced: list[dict[str, Any]] = []
+        for it in base_items:
+            cc = str(it.get("cat_code") or "CRYPTO")
+            cap = cat_caps.get(cc, 15)
+            if cat_counts.get(cc, 0) >= cap:
+                continue
+            cat_counts[cc] = cat_counts.get(cc, 0) + 1
+            balanced.append(it)
+            if len(balanced) >= 85:
+                break
+        feed["items"] = balanced
+
+    labs = bundle.get("labs")
+    if isinstance(labs, dict):
+        promos = list(labs.get("exchange_promos") or [])
+        for pr in promos:
+            if isinstance(pr, dict) and not pr.get("earn_cat"):
+                ec, el = _classify_earn_promo(str(pr.get("title") or ""), str(pr.get("summary") or ""), str(pr.get("tier") or ""))
+                pr["earn_cat"] = ec
+                pr["earn_cat_label"] = el
+        seen_p = {_norm_title_key(p.get("title", "")) for p in promos if isinstance(p, dict)}
+        for ep in eqn_promos:
+            k = _norm_title_key(ep.get("title", ""))
+            if not k or k in seen_p:
+                continue
+            seen_p.add(k)
+            promos.append(ep)
+        promos.sort(key=lambda p: (0 if p.get("earn_cat") in ("HIGH_YIELD", "AIRDROP") else 1 if p.get("earn_cat") == "CAMPAIGN" else 2, -int(p.get("created_at") or 0)))
+        labs["exchange_promos"] = promos[:16]
 
 
 def _require_bounded_int(val: Any, field: str, lo: int = 0, hi: int = 10_000_000) -> int:
@@ -137,7 +504,7 @@ def _clean_bundle(bundle: dict[str, Any], *, blocklist_path: Path | None = None)
         for fld in ("total_coins", "both_halted", "dep_only_halted", "wd_only_halted"):
             _require_bounded_int(w.get(fld), f"arb.wallet_status.summary[{i}].{fld}", 0, 100_000)
 
-    # 3. Feed text sanitization
+    # 3. Feed text sanitization & URL allowlisting (relaxed 85-item multi-source wire)
     feed = bundle["feed"]
     if isinstance(feed.get("daily_analysis"), dict):
         feed["daily_analysis"]["headline"] = sanitize_text(feed["daily_analysis"].get("headline"), max_len=140)
@@ -151,11 +518,14 @@ def _clean_bundle(bundle: dict[str, Any], *, blocklist_path: Path | None = None)
         it["source"] = sanitize_text(it.get("source"), max_len=40)
         it["impact_label"] = sanitize_text(it.get("impact_label"), max_len=80)
         it["market_ref"] = sanitize_text(it.get("market_ref"), max_len=120)
+        it["url"] = sanitize_public_url(it.get("url"), allowed_domains=ALLOWED_NEWS_DOMAINS)
+        if not it.get("cat_code"):
+            it["cat_code"] = "CRYPTO"
         if it["headline"]:
             clean_items.append(it)
-    feed["items"] = clean_items[:40]
+    feed["items"] = clean_items[:85]
 
-    # 4. Promos URL allowlist + text sanitization
+    # 4. Promos URL allowlist + text sanitization (fused exchange_promos + EQN earn/alpha)
     labs = bundle["labs"]
     clean_promos = []
     for pr in labs.get("exchange_promos", []):
@@ -166,9 +536,13 @@ def _clean_bundle(bundle: dict[str, Any], *, blocklist_path: Path | None = None)
         pr["reward"] = sanitize_text(pr.get("reward"), max_len=120)
         pr["window"] = sanitize_text(pr.get("window"), max_len=80)
         pr["url"] = sanitize_public_url(pr.get("url"), allowed_domains=ALLOWED_PROMO_DOMAINS)
+        if not pr.get("earn_cat"):
+            ec, el = _classify_earn_promo(pr["title"], pr["summary"], str(pr.get("tier") or ""))
+            pr["earn_cat"] = ec
+            pr["earn_cat_label"] = el
         if pr["title"]:
             clean_promos.append(pr)
-    labs["exchange_promos"] = clean_promos[:12]
+    labs["exchange_promos"] = clean_promos[:18]
 
     # 4b. Whales section strict type/text validation (optional 7th public endpoint)
     whales = bundle.get("whales")
@@ -185,6 +559,10 @@ def _clean_bundle(bundle: dict[str, Any], *, blocklist_path: Path | None = None)
             raise ValueError(f"whales.flagships[{i}] 不是对象")
         fl["display"] = sanitize_text(fl.get("display"), max_len=40)
         fl["short_addr"] = sanitize_text(fl.get("short_addr"), max_len=24)
+        fl["x_url"] = sanitize_public_url(fl.get("x_url"), allowed_domains=("x.com",))
+        if fl.get("x_handle") and not re.match(r"^[A-Za-z0-9_]{2,15}$", str(fl["x_handle"])):
+            fl["x_handle"] = None
+            fl["x_url"] = ""
         _require_bounded_int(fl.get("addr_count", 1), f"whales.flagships[{i}].addr_count", 1, 1000)
 
     # Inject Smart-vs-Counter extreme whale divergence signal into Overview desk_signals (top-of-screen hook!)
@@ -526,6 +904,7 @@ def main() -> int:
     parser.add_argument("--gh-min-interval", type=int, default=0, help="Min seconds between gh-pages pushes (0=every run)")
     parser.add_argument("--static-ssh-target", default=DEFAULT_STATIC_TARGET, help="Optional SSH static deploy host:/dir")
     parser.add_argument("--whale-db", default=DEFAULT_WHALE_DB, help="Optional local read-only whale_intel.db path")
+    parser.add_argument("--skip-external", action="store_true", help="Skip external EQN news & Binance bStocks live HTTP fetches")
     parser.add_argument("--repo-url", default="git@github.com:danclub-open/danclub-terminal.git", help="Git remote URL")
     args = parser.parse_args()
 
@@ -544,6 +923,11 @@ def main() -> int:
         )
         if args.whale_db:
             raw["whales"] = export_whales(Path(args.whale_db).expanduser())
+        if not args.skip_external and not args.input:
+            bstocks = fetch_binance_bstocks()
+            apply_bstocks_overlay(raw, bstocks)
+            eqn_feed, eqn_promos = fetch_eqn_news_and_earn()
+            merge_eqn_into_bundle(raw, eqn_feed, eqn_promos)
         bundle = _clean_bundle(raw, blocklist_path=args.blocklist)
         if args.require_blocklist:
             assert_clean_payload(bundle, blocklist_path=args.blocklist, require_blocklist=True)

@@ -41,11 +41,74 @@ TIER_META: dict[str, tuple[str, str, int]] = {
     "F_FORMER_LEGEND": ("F", "F级昔日传奇", 4),
 }
 
-# Only allow clean official Hyperliquid public display names (short ASCII/CJK handles, no URLs/emails/sentences)
+# Only allow clean official Hyperliquid or verified public leaderboard display names (no URLs/emails/sentences)
 _BAD_PUBLIC_NAME_RE = re.compile(
-    r"(?:http|@|\.com|\.org|\.io|microstrategy|blackrock|binance|coinbase|okx|upbit|bybit|tether|circle)",
+    r"(?:http|@|\.com|\.org|\.io|microstrategy|blackrock|binance|coinbase|okx|upbit|bybit|tether|circle|bitget|gate|青桐|铁头|胜率|巨鲸|实体|大户)",
     re.IGNORECASE,
 )
+_X_HANDLE_RE = re.compile(r"^[A-Za-z0-9_]{2,15}$")
+_EXCLUDED_X_HANDLES: frozenset[str] = frozenset({
+    "bitget", "bitget_zh", "bitgetglobal", "gate_zh", "gate_io", "gate",
+    "binance", "binancezh", "binancewallet", "binance_intern",
+    "okx", "okx_ventures", "okxchinese", "bybit_official", "hyperliquidx",
+    "coinbase", "krakenfx", "upbitglobal", "bithumbofficial",
+    "ai_9684xtpa", "embercn", "lookonchain", "onchainlens", "arkham",
+    "nansen_ai", "spotonchain", "whale_alert", "bwenews", "eqnnews",
+})
+
+
+def _extract_verified_x_and_alias(
+    hl_name: str | None,
+    ext_labels: list[str],
+    obs_labels: list[str],
+    short_addr: str,
+) -> tuple[str, str | None, str]:
+    """Return (public_display_name, verified_x_handle_or_None, x_url).
+    STRICT: NEVER reads private address_registry.entity_label; ONLY verified official HL display names
+    and whitelisted public leaderboard observations (hl_leaderboard / wsm_hyperdash_seed).
+    """
+    x_handle: str | None = None
+    for src_list in (ext_labels, obs_labels):
+        if x_handle:
+            break
+        for raw in src_list:
+            s = str(raw or "").strip()
+            for m in re.finditer(r"@([A-Za-z0-9_]{2,15})", s):
+                cand = m.group(1)
+                if _X_HANDLE_RE.match(cand) and cand.lower() not in _EXCLUDED_X_HANDLES:
+                    x_handle = cand
+                    break
+            if x_handle:
+                break
+
+    def _clean_alias(v: str | None) -> str:
+        s = re.sub(r"\s*\(@[A-Za-z0-9_]{2,15}\)\s*", "", str(v or ""))
+        s = re.sub(r"^X:@", "", s, flags=re.IGNORECASE)
+        s = re.sub(r"\s+", " ", s).strip()
+        if (
+            s
+            and 2 <= len(s) <= 22
+            and not any(ch in s for ch in ("，", "。", "！", "？", "\n", ":", "/"))
+            and not _BAD_PUBLIC_NAME_RE.search(s)
+            and all(ord(ch) < 128 for ch in s)
+        ):
+            return s
+        return ""
+
+    display = _clean_alias(hl_name)
+    if not display:
+        for raw in (*ext_labels, *obs_labels):
+            c = _clean_alias(raw)
+            if c:
+                display = c
+                break
+    if not display and x_handle:
+        display = x_handle
+    if not display:
+        display = short_addr or "Whale Entity"
+
+    x_url = f"https://x.com/{x_handle}" if x_handle else ""
+    return display, x_handle, x_url
 
 
 def _num(val: Any, ndigits: int = 2) -> float | None:
@@ -124,6 +187,8 @@ def empty_whales_payload() -> dict[str, Any]:
             "profiled_whales": 0,
             "active_entities": 0,
             "total_active_notional_usd": 0.0,
+            "x_linked_count": 0,
+            "profile_coverage_pct": 0.0,
         },
         "cohorts": {},
         "series": {},
@@ -259,6 +324,8 @@ def export_whales(db_path: Path, *, max_flagships: int = 40) -> dict[str, Any]:
         flagships: list[dict[str, Any]] = []
         active_entity_count = 0
         total_active_notional = 0.0
+        x_linked_count = 0
+        full_cov_entities = 0
 
         if latest_pos_ts > 0:
             cur_pos_rows = _safe_query(
@@ -323,27 +390,166 @@ def export_whales(db_path: Path, *, max_flagships: int = 40) -> dict[str, Any]:
 
             if top_eids:
                 ph = ",".join("?" for _ in top_eids)
-                # Strict profile coverage tracking (never turn missing profiles into fake $0!)
-                # Intentionally NEVER select address_registry.entity_label (internal note risk).
-                meta_rows = _safe_query(
+                # Dynamically detect optional enrichment columns; intentionally NEVER select private entity_label!
+                a_cols = {str(r["name"]) for r in _safe_query(conn, "PRAGMA table_info(address_registry)")}
+                o_cols = {str(r["name"]) for r in _safe_query(conn, "PRAGMA table_info(onchain_profiles)")}
+                sel_ext = "a.external_labels_json" if "external_labels_json" in a_cols else "'[]'"
+                sel_mpnl = "o.hl_month_pnl" if "hl_month_pnl" in o_cols else "NULL"
+                sel_wpnl = "o.hl_week_pnl" if "hl_week_pnl" in o_cols else "NULL"
+                sel_pos = "o.hl_positions_json" if "hl_positions_json" in o_cols else "'[]'"
+                sel_hip3 = "o.hl_hip3_positions_json" if "hl_hip3_positions_json" in o_cols else "'[]'"
+
+                addr_rows = _safe_query(
                     conn,
                     f"""
                     SELECT a.entity_cluster_id AS eid,
-                           COUNT(DISTINCT a.identifier) AS addr_count,
-                           MIN(a.identifier) AS primary_addr,
-                           MAX(CASE WHEN o.hl_display_name IS NOT NULL AND o.hl_display_name != '' THEN o.hl_display_name ELSE '' END) AS hl_name,
-                           COUNT(DISTINCT CASE WHEN o.hl_alltime_pnl IS NOT NULL THEN a.identifier END) AS pnl_cov,
-                           COUNT(DISTINCT CASE WHEN o.hl_account_value IS NOT NULL THEN a.identifier END) AS val_cov,
-                           SUM(o.hl_alltime_pnl) AS alltime_pnl,
-                           SUM(o.hl_account_value) AS account_value
+                           a.identifier AS identifier,
+                           {sel_ext} AS external_labels_json,
+                           o.hl_display_name AS hl_display_name,
+                           o.hl_alltime_pnl AS hl_alltime_pnl,
+                           {sel_mpnl} AS hl_month_pnl,
+                           {sel_wpnl} AS hl_week_pnl,
+                           o.hl_account_value AS hl_account_value,
+                           {sel_pos} AS hl_positions_json,
+                           {sel_hip3} AS hl_hip3_positions_json
                     FROM address_registry a
                     LEFT JOIN onchain_profiles o ON o.identifier = a.identifier
                     WHERE a.entity_cluster_id IN ({ph})
-                    GROUP BY a.entity_cluster_id
                     """,
                     tuple(top_eids),
                 )
-                meta_map = {str(r["eid"]): r for r in meta_rows}
+                # Only load verified public leaderboard labels (strict source_name allowlist + table check + batched IN)
+                all_top_ids = sorted({str(r["identifier"]) for r in addr_rows if r.get("identifier")})
+                obs_by_id: dict[str, list[str]] = {}
+                has_ext_obs = bool(_safe_query(conn, "SELECT 1 FROM sqlite_master WHERE type='table' AND name='external_observations'"))
+                if all_top_ids and has_ext_obs:
+                    for off in range(0, len(all_top_ids), 400):
+                        chunk = all_top_ids[off : off + 400]
+                        ph_ids = ",".join("?" for _ in chunk)
+                        obs_rows = _safe_query(
+                            conn,
+                            f"""
+                            SELECT identifier, display_label
+                            FROM external_observations
+                            WHERE identifier IN ({ph_ids})
+                              AND source_name IN ('hl_leaderboard', 'wsm_hyperdash_seed')
+                              AND display_label IS NOT NULL AND display_label != ''
+                            """,
+                            tuple(chunk),
+                        )
+                        for orow in obs_rows:
+                            obs_by_id.setdefault(str(orow["identifier"]), []).append(str(orow["display_label"]))
+
+                meta_map: dict[str, dict[str, Any]] = {}
+                pos_detail_by_eid: dict[str, dict[tuple[str, str], dict[str, Any]]] = {}
+                for r in addr_rows:
+                    eid = str(r["eid"])
+                    ident = str(r.get("identifier") or "")
+                    mm = meta_map.setdefault(
+                        eid,
+                        {
+                            "ids": set(),
+                            "primary_addr": "",
+                            "hl_name": "",
+                            "ext_labels": [],
+                            "obs_labels": [],
+                            "pnl_cov": 0,
+                            "val_cov": 0,
+                            "month_cov": 0,
+                            "week_cov": 0,
+                            "alltime_pnl": 0.0,
+                            "month_pnl": 0.0,
+                            "week_pnl": 0.0,
+                            "account_value": 0.0,
+                        },
+                    )
+                    if ident and ident not in mm["ids"]:
+                        mm["ids"].add(ident)
+                        if not mm["primary_addr"] or ident < mm["primary_addr"]:
+                            mm["primary_addr"] = ident
+                        if r.get("hl_display_name") and not mm["hl_name"]:
+                            mm["hl_name"] = str(r["hl_display_name"])
+                        try:
+                            el = json.loads(r.get("external_labels_json") or "[]")
+                            if isinstance(el, list):
+                                mm["ext_labels"].extend(str(x) for x in el if x)
+                        except (TypeError, json.JSONDecodeError):
+                            pass
+                        mm["obs_labels"].extend(obs_by_id.get(ident, []))
+                        if r.get("hl_alltime_pnl") is not None:
+                            mm["pnl_cov"] += 1
+                            mm["alltime_pnl"] += float(r["hl_alltime_pnl"])
+                        if r.get("hl_month_pnl") is not None:
+                            mm["month_cov"] += 1
+                            mm["month_pnl"] += float(r["hl_month_pnl"])
+                        if r.get("hl_week_pnl") is not None:
+                            mm["week_cov"] += 1
+                            mm["week_pnl"] += float(r["hl_week_pnl"])
+                        if r.get("hl_account_value") is not None:
+                            mm["val_cov"] += 1
+                            mm["account_value"] += float(r["hl_account_value"])
+
+                        # Merge detailed onchain entry_px / liq_px / upnl / lev with strict full-coverage checks!
+                        ep_map = pos_detail_by_eid.setdefault(eid, {})
+                        for col in ("hl_positions_json", "hl_hip3_positions_json"):
+                            try:
+                                plist = json.loads(r.get(col) or "[]")
+                            except (TypeError, json.JSONDecodeError):
+                                plist = []
+                            if not isinstance(plist, list):
+                                continue
+                            for pp in plist:
+                                if not isinstance(pp, dict):
+                                    continue
+                                cn = str(pp.get("coin") or "")
+                                sd = str(pp.get("side") or "").upper()
+                                ntl = abs(float(pp.get("ntl_usd") or 0.0))
+                                if not cn or sd not in ("LONG", "SHORT") or ntl <= 0:
+                                    continue
+                                cur = ep_map.setdefault(
+                                    (cn, sd),
+                                    {
+                                        "legs": 0,
+                                        "entry_qty_legs": 0,
+                                        "entry_qty_sum": 0.0,
+                                        "entry_cost_sum": 0.0,
+                                        "upnl_legs": 0,
+                                        "upnl_sum": 0.0,
+                                        "tight_liq": None,
+                                        "tight_lev": None,
+                                        "lev_types": set(),
+                                        "single_lev": None,
+                                    },
+                                )
+                                cur["legs"] += 1
+                                ep = _num(pp.get("entry_px"), 6)
+                                szi_abs = abs(float(pp.get("szi") or 0.0))
+                                if ep is not None and ep > 0 and szi_abs > 0:
+                                    cur["entry_qty_legs"] += 1
+                                    cur["entry_qty_sum"] += szi_abs
+                                    cur["entry_cost_sum"] += ep * szi_abs
+                                up = _num(pp.get("upnl"), 2)
+                                if up is not None:
+                                    cur["upnl_legs"] += 1
+                                    cur["upnl_sum"] += up
+                                lv = _num(pp.get("lev"), 1)
+                                if cur["legs"] == 1:
+                                    cur["single_lev"] = lv if (lv is not None and lv > 0) else None
+                                lt = str(pp.get("lev_type") or "").strip()[:12]
+                                if lt:
+                                    cur["lev_types"].add(lt)
+                                lq = _num(pp.get("liq_px"), 6)
+                                if lq is not None and lq > 0:
+                                    # Pick highest-risk (closest-to-mark) liquidation price across multi-address legs:
+                                    # for LONG higher liq_px is tighter risk; for SHORT lower liq_px is tighter risk.
+                                    is_tighter = (
+                                        cur["tight_liq"] is None
+                                        or (sd == "LONG" and lq > cur["tight_liq"])
+                                        or (sd == "SHORT" and lq < cur["tight_liq"])
+                                    )
+                                    if is_tighter:
+                                        cur["tight_liq"] = lq
+                                        cur["tight_lev"] = lv if (lv is not None and lv > 0) else None
 
                 # Full 7-day history for trajectory AND exact 24h baseline BEFORE slicing!
                 hist_agg_rows = _safe_query(
@@ -423,18 +629,60 @@ def export_whales(db_path: Path, *, max_flagships: int = 40) -> dict[str, Any]:
                 for ent in top_entities:
                     eid = ent["eid"]
                     m = meta_map.get(eid) or {}
-                    addr_count = max(1, _int_or_zero(m.get("addr_count")))
+                    addr_count = max(1, len(m.get("ids") or []))
                     pnl_cov = _int_or_zero(m.get("pnl_cov"))
                     val_cov = _int_or_zero(m.get("val_cov"))
+                    month_cov = _int_or_zero(m.get("month_cov"))
+                    week_cov = _int_or_zero(m.get("week_cov"))
                     alltime_pnl = _num(m.get("alltime_pnl"), 0) if (pnl_cov == addr_count and pnl_cov > 0) else None
+                    month_pnl = _num(m.get("month_pnl"), 0) if (month_cov == addr_count and month_cov > 0) else None
+                    week_pnl = _num(m.get("week_pnl"), 0) if (week_cov == addr_count and week_cov > 0) else None
                     account_value = _num(m.get("account_value"), 0) if (val_cov == addr_count and val_cov > 0) else None
+                    if pnl_cov == addr_count and pnl_cov > 0:
+                        full_cov_entities += 1
 
                     short_addr = _mask_addr(str(m.get("primary_addr") or ""))
-                    display = _clean_public_hl_name(m.get("hl_name"), short_addr)
+                    display, x_handle, x_url = _extract_verified_x_and_alias(
+                        m.get("hl_name"),
+                        m.get("ext_labels") or [],
+                        m.get("obs_labels") or [],
+                        short_addr,
+                    )
+                    if x_handle:
+                        x_linked_count += 1
                     tier_raw = ent["tier"]
                     tier_code, tier_label, _ = TIER_META.get(tier_raw, ("W", "活跃巨鲸", 9))
 
+                    ep_map = pos_detail_by_eid.get(eid) or {}
+                    full_cluster_prof = pnl_cov == addr_count and pnl_cov > 0
                     positions = sorted(ent["all_positions"], key=lambda p: p["usd"], reverse=True)
+                    for pos in positions:
+                        det = ep_map.get((pos["coin"], pos["side"]))
+                        if det and det["legs"] > 0 and full_cluster_prof:
+                            # Strict 100% cluster + leg qty coverage for entry_px & upnl; never mix legs for liq/lev!
+                            if det["entry_qty_legs"] == det["legs"] and det["entry_qty_sum"] > 0:
+                                entry_px = _num(det["entry_cost_sum"] / det["entry_qty_sum"], 4)
+                            else:
+                                entry_px = None
+                            pos["entry_px"] = entry_px
+                            pos["upnl"] = _num(det["upnl_sum"], 0) if det["upnl_legs"] == det["legs"] else None
+                            pos["liq_px"] = _num(det["tight_liq"], 4) if det["tight_liq"] else None
+                            if det["tight_liq"]:
+                                pos["lev"] = _num(det["tight_lev"], 1) if det["tight_lev"] else None
+                            elif det["legs"] == 1:
+                                pos["lev"] = _num(det["single_lev"], 1) if det["single_lev"] else None
+                            else:
+                                pos["lev"] = None
+                            ltypes = det["lev_types"]
+                            pos["lev_type"] = next(iter(ltypes)) if len(ltypes) == 1 else ("mixed" if len(ltypes) > 1 else "")
+                            pos["legs"] = det["legs"]
+                        else:
+                            pos["entry_px"] = None
+                            pos["liq_px"] = None
+                            pos["upnl"] = None
+                            pos["lev"] = None
+                            pos["lev_type"] = ""
+                            pos["legs"] = 0
                     primary = positions[0]
                     ship_code, ship_label = _ship_class(ent["total_notional"])
 
@@ -479,6 +727,8 @@ def export_whales(db_path: Path, *, max_flagships: int = 40) -> dict[str, Any]:
                         "id": f"W-{eid[-6:].upper()}",
                         "display": display,
                         "short_addr": short_addr,
+                        "x_handle": x_handle,
+                        "x_url": x_url,
                         "addr_count": addr_count,
                         "profile_cov": f"{pnl_cov}/{addr_count}",
                         "tier": tier_raw,
@@ -495,11 +745,14 @@ def export_whales(db_path: Path, *, max_flagships: int = 40) -> dict[str, Any]:
                         "delta_window_h": delta_window_h,
                         "action": action,
                         "alltime_pnl": alltime_pnl,
+                        "month_pnl": month_pnl,
+                        "week_pnl": week_pnl,
                         "account_value": account_value,
                         "positions": positions[:8],
                         "history": chart_traj,
                     })
 
+        cov_pct = round((full_cov_entities / len(flagships)) * 100.0, 1) if flagships else 0.0
         return {
             "available": bool(cohorts_by_coin or flagships),
             "updated_at": updated_at,
@@ -508,6 +761,8 @@ def export_whales(db_path: Path, *, max_flagships: int = 40) -> dict[str, Any]:
                 "profiled_whales": profiled_whales,
                 "active_entities": active_entity_count,
                 "total_active_notional_usd": total_active_notional,
+                "x_linked_count": x_linked_count if flagships else 0,
+                "profile_coverage_pct": cov_pct,
             },
             "cohorts": cohorts_by_coin,
             "series": series_by_coin,

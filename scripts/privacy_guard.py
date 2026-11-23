@@ -57,7 +57,7 @@ STRIP_LINE_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"【内部[^】]*】"),
 ]
 
-# Official exchange hostnames allowed for public promo links (subdomain-aware)
+# Official exchange & public wire hostnames allowed for public promo/news/profile links (subdomain-aware)
 ALLOWED_PROMO_DOMAINS: tuple[str, ...] = (
     "binance.com",
     "okx.com",
@@ -68,6 +68,18 @@ ALLOWED_PROMO_DOMAINS: tuple[str, ...] = (
     "kraken.com",
     "coinbase.com",
     "hyperliquid.xyz",
+    "asterdex.com",
+    "eqn.news",
+    "x.com",
+)
+ALLOWED_NEWS_DOMAINS: tuple[str, ...] = ALLOWED_PROMO_DOMAINS + (
+    "upbit.com",
+    "bithumb.com",
+    "sec.gov",
+    "reuters.com",
+    "bloomberg.com",
+    "coindesk.com",
+    "theblock.co",
 )
 
 

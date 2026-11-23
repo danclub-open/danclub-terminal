@@ -266,7 +266,8 @@ class TestExporterIntegrityAndHygiene(unittest.TestCase):
             items = feed["items"]
             self.assertEqual(len(items), 3)  # 1 Kraken + 1 Taiwan + 1 OKX announcement
             cats = {it["category"] for it in items}
-            self.assertIn("交易所公告", cats)
+            self.assertIn("上新·公告", cats)
+            self.assertIn("LISTING", {it["cat_code"] for it in items})
             tw = next(it for it in items if "台湾" in it["headline"])
             self.assertNotIn("被盗", tw["impact_label"])
             kr = next(it for it in items if "Kraken" in it["headline"])
@@ -532,6 +533,104 @@ class TestExporterIntegrityAndHygiene(unittest.TestCase):
         parsed = exp._parse_clean_promo(row_active, now_dt)
         self.assertIsNotNone(parsed)
         self.assertEqual(parsed["exchange"], "Binance")
+
+    def test_bstocks_overlay_eqn_merge_and_whale_x_accounts(self) -> None:
+        # 1. Binance Spot bStocks overlay promotes 24/7 quotes when US market closed; mixed batch does NOT append extras
+        bundle = {
+            "overview": {
+                "macro_quotes": [
+                    {"symbol": "NVDA", "name": "英伟达", "group": "算力存储", "price": 125.53, "chg_pct": -14.01, "session": "CLOSED", "is_closed": True},
+                    {"symbol": "SPY", "name": "标普500", "group": "美股指数", "price": 689.81, "chg_pct": -3.64, "session": "CLOSED", "is_closed": True},
+                ]
+            },
+            "feed": {"items": []},
+            "labs": {"exchange_promos": []},
+        }
+        bstocks = {
+            "NVDA": {"bstock_symbol": "NVDABUSDT", "price": 135.74, "chg_pct": 2.44, "vol_usd": 59_000_000},
+            "SPY": {"bstock_symbol": "SPYBUSDT", "price": 709.35, "chg_pct": 1.07, "vol_usd": 610_000},
+            "TSLA": {"bstock_symbol": "TSLABUSDT", "price": 362.20, "chg_pct": 1.65, "vol_usd": 3_440_000},
+        }
+        syncer.apply_bstocks_overlay(bundle, bstocks)
+        nvda = next(q for q in bundle["overview"]["macro_quotes"] if q["symbol"] == "NVDA")
+        tsla = next(q for q in bundle["overview"]["macro_quotes"] if q["symbol"] == "TSLA")
+        self.assertEqual(nvda["session"], "BSTOCKS_247")
+        self.assertEqual(nvda["price"], 135.74)
+        self.assertEqual(nvda["reg_px"], 125.53)  # Official close preserved!
+        self.assertEqual(tsla["price_source"], "BINANCE_BSTOCKS")
+
+        # When ANY US equity is LIVE (mixed or regular session), extra bStocks MUST NOT be appended!
+        live_bundle = {
+            "overview": {
+                "macro_quotes": [
+                    {"symbol": "NVDA", "name": "英伟达", "group": "算力存储", "price": 136.0, "chg_pct": 2.1, "session": "LIVE", "is_closed": False},
+                    {"symbol": "SPY", "name": "标普500", "group": "美股指数", "price": 689.81, "chg_pct": -3.64, "session": "CLOSED", "is_closed": True},
+                ]
+            },
+            "feed": {"items": []},
+            "labs": {"exchange_promos": []},
+        }
+        syncer.apply_bstocks_overlay(live_bundle, bstocks)
+        self.assertEqual(len(live_bundle["overview"]["macro_quotes"]), 2)
+        self.assertEqual(live_bundle["overview"]["macro_quotes"][0]["session"], "LIVE")
+
+        # 2. EQN multi-category news & earn merge deduplicates cleanly
+        eqn_feed = [
+            {"id": 0, "ts": 1795420000, "dt_bjt": "2026-11-23 16:00:00", "level": "major", "cat_code": "MACRO", "category": "美股·宏观", "source": "方程式财经", "headline": "美股科技股盘后大涨", "impact_label": "", "impact_tone": "bullish", "market_ref": "", "body": "", "coins": [], "url": "https://eqn.news/monitor/1"},
+            {"id": 0, "ts": 1795419900, "dt_bjt": "2026-11-23 15:58:00", "level": "normal", "cat_code": "EARN", "category": "理财·羊毛", "source": "EQN · 币安重要公告", "headline": "Binance Earn USDC 活期享 5% 年化", "impact_label": "", "impact_tone": "neutral", "market_ref": "", "body": "", "coins": [], "url": "https://eqn.news/monitor/2"},
+        ]
+        eqn_promos = [
+            {"exchange": "Binance", "tier": "HIGH", "tier_label": "高息理财", "worth_level": "高息理财", "earn_cat": "HIGH_YIELD", "earn_cat_label": "高息理财", "promo_type": "理财提醒", "title": "Binance Earn USDC 活期享 5% 年化", "reward": "最高 5% 年化", "window": "11-23", "summary": "活期理财", "url": "https://eqn.news/monitor/2", "created_at": 1795419900},
+        ]
+        syncer.merge_eqn_into_bundle(bundle, eqn_feed, eqn_promos)
+        self.assertEqual(len(bundle["feed"]["items"]), 2)
+        self.assertEqual(len(bundle["labs"]["exchange_promos"]), 1)
+        self.assertEqual(bundle["labs"]["exchange_promos"][0]["earn_cat"], "HIGH_YIELD")
+
+        # 3. Verified public whale X handles exposed, exchange handles (@Bitget_zh) blocked, entry/liq populated
+        with tempfile.TemporaryDirectory() as td:
+            wdb = Path(td) / "whale_intel.db"
+            c = sqlite3.connect(wdb)
+            c.execute("CREATE TABLE address_registry (identifier TEXT, entity_cluster_id TEXT, entity_label TEXT, external_labels_json TEXT)")
+            c.execute("CREATE TABLE onchain_profiles (identifier TEXT, hl_found INT, hl_display_name TEXT, hl_alltime_pnl REAL, hl_month_pnl REAL, hl_week_pnl REAL, hl_account_value REAL, hl_positions_json TEXT, hl_hip3_positions_json TEXT)")
+            c.execute("CREATE TABLE live_ls_snapshots (ts INT, cohort TEXT, coin TEXT, long_entities INT, short_entities INT, balanced_entities INT, headcount_long_pct REAL, long_usd REAL, short_usd REAL, net_usd REAL, notional_long_pct REAL, btc_price REAL, eth_price REAL)")
+            c.execute("CREATE TABLE live_entity_pos_history (ts INT, entity_cluster_id TEXT, tier TEXT, coin TEXT, szi REAL, signed_ntl_usd REAL, mark_px REAL)")
+            pos_j = json.dumps([{"coin": "BTC", "side": "LONG", "szi": 800, "ntl_usd": 50000000, "entry_px": 70000, "liq_px": 45000, "upnl": -2000000, "lev": 15, "lev_type": "cross"}])
+            c.execute("INSERT INTO address_registry VALUES ('0xaaaa111122223333444455556666777788889999', 'ent_x1', 'X:@loraclexyz', ?)", (json.dumps(["Loracle (@loraclexyz)"]),))
+            c.execute("INSERT INTO onchain_profiles VALUES ('0xaaaa111122223333444455556666777788889999', 1, '', 9000000, 1200000, 300000, 15000000, ?, '[]')", (pos_j,))
+            c.execute("INSERT INTO live_entity_pos_history VALUES (1795420000, 'ent_x1', 'S_SMART_WHALE', 'BTC', 800, 50000000, 62500)")
+            # Private entity_label 'X:@private_handle' with empty external_labels MUST NEVER leak!
+            c.execute("INSERT INTO address_registry VALUES ('0xbbbb111122223333444455556666777788889999', 'ent_x2', 'X:@private_handle', '[]')")
+            # Partial missing entry_px/upnl across 2 cluster legs MUST return None (NOT half-price or partial sum!)
+            leg1 = json.dumps([{"coin": "ETH", "side": "LONG", "szi": 5000, "ntl_usd": 10000000, "entry_px": 2000, "liq_px": 1500, "upnl": 500000, "lev": 10, "lev_type": "cross"}])
+            leg2 = json.dumps([{"coin": "ETH", "side": "LONG", "szi": 5000, "ntl_usd": 10000000, "entry_px": None, "liq_px": 1800, "upnl": None, "lev": 20, "lev_type": "isolated"}])
+            c.execute("INSERT INTO address_registry VALUES ('0xcccc111122223333444455556666777788889999', 'ent_x2', 'X:@Bitget_zh', '[]')")
+            c.execute("INSERT INTO onchain_profiles VALUES ('0xbbbb111122223333444455556666777788889999', 1, '', 1000000, 100000, 50000, 5000000, ?, '[]')", (leg1,))
+            c.execute("INSERT INTO onchain_profiles VALUES ('0xcccc111122223333444455556666777788889999', 1, '', 1000000, 100000, 50000, 5000000, ?, '[]')", (leg2,))
+            c.execute("INSERT INTO live_entity_pos_history VALUES (1795420000, 'ent_x2', 'S_SMART_WHALE', 'ETH', 10000, 20000000, 2000)")
+            c.commit()
+            c.close()
+
+            w = wexp.export_whales(wdb)
+            by_a = {f["short_addr"]: f for f in w["flagships"]}
+            f1 = by_a["0xaaaa…9999"]
+            self.assertEqual(f1["display"], "Loracle")
+            self.assertEqual(f1["x_handle"], "loraclexyz")
+            self.assertEqual(f1["x_url"], "https://x.com/loraclexyz")
+            self.assertEqual(f1["month_pnl"], 1200000.0)
+            self.assertEqual(f1["positions"][0]["entry_px"], 70000.0)
+            self.assertEqual(f1["positions"][0]["liq_px"], 45000.0)
+            self.assertEqual(f1["positions"][0]["lev"], 15.0)
+
+            f2 = by_a["0xbbbb…9999"]
+            self.assertIsNone(f2["x_handle"])
+            self.assertNotIn("private_handle", json.dumps(w))
+            self.assertEqual(f2["x_url"], "")
+            self.assertEqual(f2["display"], "0xbbbb…9999")
+            self.assertIsNone(f2["positions"][0]["entry_px"])  # partial leg missing -> None (NOT 1000!)
+            self.assertIsNone(f2["positions"][0]["upnl"])      # partial leg missing -> None!
+            self.assertEqual(f2["positions"][0]["liq_px"], 1800.0)  # tightest LONG liq_px (1800 > 1500)
+            self.assertEqual(f2["positions"][0]["lev_type"], "mixed")
 
     def test_frontend_zero_svg_distortion_and_has_x_axis(self) -> None:
         js = (ROOT / "site" / "assets" / "app.js").read_text(encoding="utf-8")

@@ -1349,6 +1349,36 @@ def _is_similar_headline(a: str, b: str) -> bool:
     return False
 
 
+def _classify_feed_cat(raw_cat: str, headline: str, source: str) -> tuple[str, str]:
+    """Map raw archive/wire items into 6 crisp public categories."""
+    text = f"{headline} {source}"
+    if raw_cat == "交易所公告" or re.search(
+        r"(?:上新|上线|下架|充提暂停|交易注意|交易警示|调整.*资金费率|合约拆股|币对|Listing|Delist)",
+        headline,
+        re.IGNORECASE,
+    ):
+        if re.search(r"(?:Alpha\s*积分|空投|Simple\s*Earn|Yield\s*Arena|年化|理财|认购|打新|Hold\s*&\s*Earn|瓜分)", headline, re.IGNORECASE):
+            return "EARN", "理财·羊毛"
+        return "LISTING", "上新·公告"
+    if re.search(r"(?:Alpha\s*积分|空投|Simple\s*Earn|Yield\s*Arena|年化|理财|认购|打新|Launchpool|Megadrop|HODLer|瓜分)", headline, re.IGNORECASE):
+        return "EARN", "理财·羊毛"
+    if raw_cat == "情报预警" or re.search(
+        r"(?:被盗|黑客|漏洞|攻击|跨链桥|SEC|证监会|高管减持|破产|清算风险|冻结|异常低价)",
+        headline,
+        re.IGNORECASE,
+    ):
+        return "INTEL", "深度预警"
+    if re.search(r"(?:1小时\s*[+-]\d|空头回补|未平仓合约|OI/|暴跌|暴涨|急涨|急跌|反弹\s*\d|过去\s*\d+\s*小时)", headline, re.IGNORECASE):
+        return "MOVES", "异动·OI"
+    if re.search(
+        r"(?:美股|美联储|鲍威尔|CPI|非农|关税|英伟达|NVIDIA|特斯拉|Tesla|苹果|亚马逊|谷歌|微软|伊朗|霍尔木兹|原油|黄金|国债|美债|纳指|标普|台股|央行|加息|降息|融资保证金|卖空禁令|Anthropic)",
+        text,
+        re.IGNORECASE,
+    ):
+        return "MACRO", "美股·宏观"
+    return "CRYPTO", "加密快讯"
+
+
 def _parse_feed_entry(r: dict[str, Any]) -> dict[str, Any] | None:
     msg = str(r.get("msg") or "").strip()
     if not msg or GENERIC_PRIVATE_RE.search(msg):
@@ -1411,20 +1441,42 @@ def _parse_feed_entry(r: dict[str, Any]) -> dict[str, Any] | None:
 
     # Clean up redundant "(先手坐标：...)" prefix
     market_ref = re.sub(r"^(?:先手坐标|联动盯盘)[：:]\s*", "", market_ref).strip()
+    cat_code, cat_label = _classify_feed_cat(cat, headline, source)
 
     return {
         "id": _int_or_zero(r.get("id")),
         "ts": _int_or_zero(r.get("ts")),
         "dt_bjt": str(r.get("dt_bjt") or ""),
         "level": str(r.get("level") or "normal"),
-        "category": cat,
+        "cat_code": cat_code,
+        "category": cat_label,
         "source": source,
         "headline": _clean_cut(headline, 180),
         "impact_label": _clean_cut(impact_label, 72),
         "impact_tone": impact_tone,
         "market_ref": _clean_cut(market_ref, 110),
         "body": _clean_cut(" ".join(extra_lines), 220) if extra_lines else "",
+        "coins": [],
+        "url": "",
     }
+
+
+# Reputable public global wire accounts allowed in relaxed website feed (2 levels looser than strict group alerts)
+_RELAXED_WIRE_AUTHORS: tuple[str, ...] = (
+    "Reuters",
+    "Bloomberg",
+    "WSJ",
+    "FinancialJuice",
+    "FirstSquawk",
+    "DeItaone",
+    "WatcherGuru",
+    "TreeNewsFeed",
+    "unusual_whales",
+    "BinanceWallet",
+    "lookonchain",
+    "CoinDesk",
+    "TheBlock__",
+)
 
 
 def export_feed(data_dir: Path, *, now_sec: int | None = None) -> dict[str, Any]:
@@ -1465,8 +1517,8 @@ def export_feed(data_dir: Path, *, now_sec: int | None = None) -> dict[str, Any]
                     "body": _clean_cut(body, 360),
                 }
 
-        # Reserve guaranteed per-category quotas so Exchange Announcements are NEVER starved by fast wire
-        quotas = (("秒级快讯", 55, 24), ("交易所公告", 20, 8), ("情报预警", 18, 6))
+        # Reserve guaranteed per-category quotas (relaxed 2 levels for broader public website wire coverage)
+        quotas = (("秒级快讯", 75, 28), ("交易所公告", 25, 10), ("情报预警", 24, 10))
         for cat, sql_lim, keep_lim in quotas:
             rows, _ = _safe_query(
                 conn_arc,
@@ -1489,12 +1541,72 @@ def export_feed(data_dir: Path, *, now_sec: int | None = None) -> dict[str, Any]
                 cat_kept += 1
                 if cat_kept >= keep_lim:
                     break
-
-        items.sort(key=lambda x: (x["ts"], x["id"]), reverse=True)
     finally:
         if conn_arc:
             conn_arc.close()
 
+    # Relaxed-tier supplemental global wires from realtime_news.db (2 levels looser than strict alert channel)
+    conn_rt = _connect_ro(data_dir, "realtime_news.db")
+    try:
+        ph = ",".join("?" for _ in _RELAXED_WIRE_AUTHORS)
+        xp_rows, _ = _safe_query(
+            conn_rt,
+            f"""
+            SELECT author, published_at, text, url
+            FROM x_posts
+            WHERE author IN ({ph})
+              AND published_at >= ?
+            ORDER BY published_at DESC
+            LIMIT 40
+            """,
+            _RELAXED_WIRE_AUTHORS + (max(0, now_ts - 24 * 3600),),
+        )
+        added_rt = 0
+        for r in xp_rows:
+            raw_txt = re.sub(r"https?://t\.co/\S+", "", str(r.get("text") or "")).strip()
+            raw_txt = re.sub(r"\s+", " ", _strip_emojis(raw_txt)).strip()
+            if not raw_txt or len(raw_txt) < 24 or raw_txt.startswith(("@", "RT @")) or GENERIC_PRIVATE_RE.search(raw_txt):
+                continue
+            ts_v = _int_or_zero(r.get("published_at"))
+            if ts_v <= 0:
+                continue
+            # Require at least one financial/crypto/macro keyword to avoid off-topic chatter
+            if not re.search(
+                r"(?:BTC|ETH|SOL|BNB|XRP|CRYPTO|BITCOIN|ETHEREUM|BINANCE|COINBASE|SEC|FED|FOMC|CPI|GDP|RATE|TARIFF|NVIDIA|NVDA|TESLA|APPLE|MSTR|OIL|GOLD|TREASURY|BOND|STOCK|MARKET|NASDAQ|S&P|ALPHA|AIRDROP|IPO|HACK|EXPLOIT|IRAN|CHINA|JAPAN|BOJ|ECB|USD|USDT|USDC)",
+                raw_txt,
+                re.IGNORECASE,
+            ):
+                continue
+            dup = any(abs(ex["ts"] - ts_v) <= 8 * 3600 and _is_similar_headline(ex["headline"], raw_txt) for ex in items)
+            if dup:
+                continue
+            author = str(r.get("author") or "Global Wire")
+            cat_code, cat_label = _classify_feed_cat("秒级快讯", raw_txt, author)
+            dt_str = datetime.fromtimestamp(ts_v, BJT).strftime("%Y-%m-%d %H:%M:%S")
+            items.append({
+                "id": 0,
+                "ts": ts_v,
+                "dt_bjt": dt_str,
+                "level": "normal",
+                "cat_code": cat_code,
+                "category": cat_label,
+                "source": author,
+                "headline": _clean_cut(raw_txt, 180),
+                "impact_label": "",
+                "impact_tone": "neutral",
+                "market_ref": "",
+                "body": "",
+                "coins": [],
+                "url": str(r.get("url") or "") if str(r.get("url") or "").startswith("https://x.com/") else "",
+            })
+            added_rt += 1
+            if added_rt >= 14:
+                break
+    finally:
+        if conn_rt:
+            conn_rt.close()
+
+    items.sort(key=lambda x: (x["ts"], x.get("id", 0)), reverse=True)
     return {
         "daily_analysis": short_analysis,
         "items": items,

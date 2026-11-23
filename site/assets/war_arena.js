@@ -32,8 +32,12 @@
     filterTier: "ALL",
     filterCoin: "ALL",
     filterSide: "ALL",
+    filterXOnly: false,
     search: "",
-    soundOn: false,
+    soundOn: true, // Default ON: auto-plays on load or instantaneously unlocks on first gesture!
+    userMuted: false,
+    autoUnlockArmed: false,
+    localBlobUrl: null,
     volume: readSavedVolume(),
     trackIdx: Math.floor(Math.random() * WAR_TRACKS.length),
     bgm: null,
@@ -54,7 +58,11 @@
     cssH: 360,
     dpr: 1,
     frontline: 0.5,
+    frontlineVel: 0,
     targetFrontline: 0.5,
+    clashY: 180,
+    clashPower: 0,
+    clashSide: "LONG",
     shakeAmt: 0,
     bannerText: "",
     bannerSide: "LONG",
@@ -62,6 +70,7 @@
     planes: [],
     sparks: [],
     rings: [],
+    floatingHits: [],
     carriers: [],
     hoveredCarrier: null,
     mouseX: -1,
@@ -168,6 +177,35 @@
     }
   }
 
+  let _gestureUnlockHandler = null;
+  function disarmGestureUnlock() {
+    if (_gestureUnlockHandler) {
+      window.removeEventListener("pointerdown", _gestureUnlockHandler, true);
+      window.removeEventListener("keydown", _gestureUnlockHandler, true);
+      _gestureUnlockHandler = null;
+      war.autoUnlockArmed = false;
+    }
+  }
+
+  function armGestureUnlock() {
+    if (war.autoUnlockArmed || war.userMuted) return;
+    war.autoUnlockArmed = true;
+    _gestureUnlockHandler = (ev) => {
+      const t = ev.target;
+      if (t && typeof t.closest === "function" && t.closest("#btn-war-sound, #war-audio-prompt, #war-local-file, .war-local-btn, #war-track-select, #btn-war-next-track")) {
+        disarmGestureUnlock();
+        return;
+      }
+      disarmGestureUnlock();
+      if (!war.userMuted && war.running && !document.hidden) {
+        war.audioErrCount = 0;
+        playCurrentAnthem(false);
+      }
+    };
+    window.addEventListener("pointerdown", _gestureUnlockHandler, true);
+    window.addEventListener("keydown", _gestureUnlockHandler, true);
+  }
+
   function playCurrentAnthem(forceReload = false) {
     const el = ensureAudioElement();
     const track = WAR_TRACKS[war.trackIdx] || WAR_TRACKS[0];
@@ -184,6 +222,7 @@
 
     war.soundOn = true;
     war.pausedByHidden = false;
+    disarmGestureUnlock();
     syncAudioUi();
 
     try {
@@ -202,8 +241,13 @@
         if (war.playSeq !== seq) return;
         war.soundOn = false;
         const blocked = err && err.name === "NotAllowedError";
-        if (!blocked) war.needsAudioReload = true;
-        syncAudioUi(blocked ? "浏览器限制自动播放，请点击「开启战歌」解锁" : "战歌加载受阻，请点击「开启战歌」重试");
+        if (!blocked) {
+          war.needsAudioReload = true;
+          syncAudioUi("战歌加载受阻，请点击「开启战歌」重试");
+        } else {
+          armGestureUnlock();
+          syncAudioUi("战歌默认开启 · 点击页面任意处即刻燃起");
+        }
       });
     }
   }
@@ -503,86 +547,227 @@
     }
   }
 
-  /* ---------- Vector Aircraft & Carrier Drawing Primitives ---------- */
-  function drawAircraft(ctx, x, y, dir, tier, color) {
+  /* ---------- High-Detail Multi-Layer Vector Aircraft & Dreadnought Carrier Models ---------- */
+  function drawAircraft(ctx, x, y, dir, tier, color, ts = 0) {
     ctx.save();
     ctx.translate(x, y);
     if (dir < 0) ctx.scale(-1, 1);
+    const flicker = 0.72 + Math.sin(ts * 0.045 + x * 0.12) * 0.28;
+    const isLong = dir > 0;
+    const accentGlow = isLong ? "#6ee7b7" : "#fda4af";
+    const flameCol = isLong ? "#38bdf8" : "#f59e0b";
 
     if (tier === 1) {
-      // Micro-drone / kinetic tracer dart
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 1.6;
+      // Tier 1 (<$50K): Tactical Plasma Drone Dart with swept micro-fins & hot ion tail
+      const tailG = ctx.createLinearGradient(-15, 0, 6, 0);
+      tailG.addColorStop(0, "transparent");
+      tailG.addColorStop(0.55, color);
+      tailG.addColorStop(1, "#ffffff");
+      ctx.strokeStyle = tailG;
+      ctx.lineWidth = 2.0;
       ctx.beginPath();
-      ctx.moveTo(-10, 0);
-      ctx.lineTo(5, 0);
+      ctx.moveTo(-14, 0);
+      ctx.lineTo(6, 0);
       ctx.stroke();
+
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.moveTo(8, 0);
+      ctx.lineTo(-2, -3.8);
+      ctx.lineTo(-5, -3.2);
+      ctx.lineTo(-2.5, 0);
+      ctx.lineTo(-5, 3.2);
+      ctx.lineTo(-2, 3.8);
+      ctx.closePath();
+      ctx.fill();
+
       ctx.fillStyle = "#ffffff";
       ctx.beginPath();
-      ctx.arc(5, 0, 1.5, 0, Math.PI * 2);
+      ctx.arc(6.5, 0, 1.5, 0, Math.PI * 2);
       ctx.fill();
     } else if (tier === 2) {
-      // Swept-wing Light Fighter ($50k - $250k)
-      ctx.fillStyle = color;
-      ctx.shadowColor = color;
-      ctx.shadowBlur = 8;
+      // Tier 2 ($50K-$250K): F-22 Raptor Stealth Light Fighter with cockpit glass & afterburner
+      // Dynamic pulsing afterburner jet cone
+      const fLen = 9 + flicker * 8;
+      const fGrad = ctx.createLinearGradient(-12 - fLen, 0, -10, 0);
+      fGrad.addColorStop(0, "transparent");
+      fGrad.addColorStop(0.5, flameCol);
+      fGrad.addColorStop(1, "#ffffff");
+      ctx.fillStyle = fGrad;
       ctx.beginPath();
-      ctx.moveTo(12, 0);
-      ctx.lineTo(-4, -7.5);
-      ctx.lineTo(-9, -6.5);
-      ctx.lineTo(-5, -1.5);
-      ctx.lineTo(-11, -3.5);
-      ctx.lineTo(-11, 3.5);
-      ctx.lineTo(-5, 1.5);
-      ctx.lineTo(-9, 6.5);
-      ctx.lineTo(-4, 7.5);
+      ctx.moveTo(-10, -2.2);
+      ctx.lineTo(-12 - fLen, 0);
+      ctx.lineTo(-10, 2.2);
       ctx.closePath();
       ctx.fill();
-    } else if (tier === 3) {
-      // Heavy Twin-Engine Strike Interceptor ($250k - $1M)
+
+      // Trapezoidal swept stealth wings & canted twin tails
       ctx.fillStyle = color;
       ctx.shadowColor = color;
-      ctx.shadowBlur = 14;
+      ctx.shadowBlur = 11;
       ctx.beginPath();
-      ctx.moveTo(18, 0);
-      ctx.lineTo(4, -4);
-      ctx.lineTo(-5, -13);
-      ctx.lineTo(-11, -11);
-      ctx.lineTo(-7, -3.5);
-      ctx.lineTo(-15, -5.5);
-      ctx.lineTo(-14, 0);
-      ctx.lineTo(-15, 5.5);
-      ctx.lineTo(-7, 3.5);
-      ctx.lineTo(-11, 11);
-      ctx.lineTo(-5, 13);
-      ctx.lineTo(4, 4);
+      ctx.moveTo(16, 0);
+      ctx.lineTo(7, -2.6);
+      ctx.lineTo(-2, -11.5);
+      ctx.lineTo(-7.5, -10.5);
+      ctx.lineTo(-6, -3.4);
+      ctx.lineTo(-13, -6.2);
+      ctx.lineTo(-14, -4.4);
+      ctx.lineTo(-11, -1.6);
+      ctx.lineTo(-11, 1.6);
+      ctx.lineTo(-14, 4.4);
+      ctx.lineTo(-13, 6.2);
+      ctx.lineTo(-6, 3.4);
+      ctx.lineTo(-7.5, 10.5);
+      ctx.lineTo(-2, 11.5);
+      ctx.lineTo(7, 2.6);
       ctx.closePath();
+      ctx.fill();
+      ctx.shadowBlur = 0;
+
+      // Specular metallic ridge & tinted glass cockpit canopy
+      ctx.strokeStyle = accentGlow;
+      ctx.lineWidth = 0.9;
+      ctx.beginPath();
+      ctx.moveTo(14, 0);
+      ctx.lineTo(-9, 0);
+      ctx.stroke();
+
+      ctx.fillStyle = "#e0f2fe";
+      ctx.beginPath();
+      ctx.ellipse(6.5, 0, 3.6, 1.4, 0, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (tier === 3) {
+      // Tier 3 ($250K-$1M): Su-57 Heavy Twin-Engine Strike Interceptor with canards & dual plasma plumes
+      const fLen = 13 + flicker * 10;
+      [-3.4, 3.4].forEach((ey) => {
+        const fg = ctx.createLinearGradient(-16 - fLen, ey, -14, ey);
+        fg.addColorStop(0, "transparent");
+        fg.addColorStop(0.45, flameCol);
+        fg.addColorStop(1, "#ffffff");
+        ctx.fillStyle = fg;
+        ctx.beginPath();
+        ctx.moveTo(-14, ey - 1.9);
+        ctx.lineTo(-16 - fLen, ey);
+        ctx.lineTo(-14, ey + 1.9);
+        ctx.closePath();
+        ctx.fill();
+      });
+
+      // Multi-segment armored fuselage + forward canards + broad swept strike wings
+      ctx.fillStyle = color;
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 17;
+      ctx.beginPath();
+      ctx.moveTo(23, 0);
+      ctx.lineTo(13, -3.2);
+      ctx.lineTo(9, -7.8);   // Forward canard
+      ctx.lineTo(5.5, -6.8);
+      ctx.lineTo(6.5, -3.8);
+      ctx.lineTo(-4, -17.5); // Swept strike wing
+      ctx.lineTo(-11.5, -15.5);
+      ctx.lineTo(-8.5, -5.5);
+      ctx.lineTo(-17.5, -8.5);
+      ctx.lineTo(-18.5, -5.8);
+      ctx.lineTo(-14.5, -3.6);
+      ctx.lineTo(-15.5, 0);
+      ctx.lineTo(-14.5, 3.6);
+      ctx.lineTo(-18.5, 5.8);
+      ctx.lineTo(-17.5, 8.5);
+      ctx.lineTo(-8.5, 5.5);
+      ctx.lineTo(-11.5, 15.5);
+      ctx.lineTo(-4, 17.5);
+      ctx.lineTo(6.5, 3.8);
+      ctx.lineTo(5.5, 6.8);
+      ctx.lineTo(9, 7.8);
+      ctx.lineTo(13, 3.2);
+      ctx.closePath();
+      ctx.fill();
+      ctx.shadowBlur = 0;
+
+      // Armor trim & twin-seater canopy + glowing nose radar
+      ctx.strokeStyle = "rgba(255,255,255,0.68)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.fillStyle = "#e0f2fe";
+      ctx.beginPath();
+      ctx.ellipse(10.5, 0, 5.2, 1.9, 0, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = "#ffffff";
       ctx.beginPath();
-      ctx.arc(8, 0, 1.8, 0, Math.PI * 2);
+      ctx.arc(21.5, 0, 1.6, 0, Math.PI * 2);
       ctx.fill();
     } else {
-      // Tier 4: B-2 Strategic Stealth Flying-Wing Bomber (>= $1M)
+      // Tier 4 (>=$1M): B-2 Spirit Strategic Stealth Flying-Wing Bomber with 4 dorsal exhausts & Mach cone!
+      // Shockwave Mach cone in front of nose
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.35)";
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.moveTo(14, -26);
+      ctx.quadraticCurveTo(34, 0, 14, 26);
+      ctx.stroke();
+
+      // 4 recessed strategic jet plumes
+      [-10, -5, 5, 10].forEach((ey) => {
+        const fg = ctx.createLinearGradient(-18 - flicker * 14, ey, -10, ey);
+        fg.addColorStop(0, "transparent");
+        fg.addColorStop(0.55, "#f59e0b");
+        fg.addColorStop(1, "#ffffff");
+        ctx.fillStyle = fg;
+        ctx.beginPath();
+        ctx.moveTo(-10, ey - 1.7);
+        ctx.lineTo(-22 - flicker * 11, ey);
+        ctx.lineTo(-10, ey + 1.7);
+        ctx.closePath();
+        ctx.fill();
+      });
+
+      // Iconic W-edge stealth flying-wing silhouette
       ctx.fillStyle = color;
       ctx.shadowColor = color;
-      ctx.shadowBlur = 22;
+      ctx.shadowBlur = 26;
       ctx.beginPath();
-      ctx.moveTo(24, 0);
-      ctx.lineTo(-4, -22);
-      ctx.lineTo(-14, -18);
-      ctx.lineTo(-8, -9);
-      ctx.lineTo(-16, -5);
-      ctx.lineTo(-11, 0);
-      ctx.lineTo(-16, 5);
-      ctx.lineTo(-8, 9);
-      ctx.lineTo(-14, 18);
-      ctx.lineTo(-4, 22);
+      ctx.moveTo(28, 0);
+      ctx.lineTo(-3, -29);
+      ctx.lineTo(-14, -24);
+      ctx.lineTo(-8, -14);
+      ctx.lineTo(-18, -9);
+      ctx.lineTo(-11, -3.5);
+      ctx.lineTo(-17, 0);
+      ctx.lineTo(-11, 3.5);
+      ctx.lineTo(-18, 9);
+      ctx.lineTo(-8, 14);
+      ctx.lineTo(-14, 24);
+      ctx.lineTo(-3, 29);
       ctx.closePath();
       ctx.fill();
-      ctx.strokeStyle = "rgba(255,255,255,0.75)";
-      ctx.lineWidth = 1.2;
+      ctx.shadowBlur = 0;
+
+      // Internal stealth panel seam lines
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.8)";
+      ctx.lineWidth = 1.3;
       ctx.stroke();
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.32)";
+      ctx.lineWidth = 0.9;
+      ctx.beginPath();
+      ctx.moveTo(17, 0);
+      ctx.lineTo(-5, -18);
+      ctx.moveTo(17, 0);
+      ctx.lineTo(-5, 18);
+      ctx.stroke();
+
+      // Cockpit visor + strobing wingtip navigation beacons
+      ctx.fillStyle = "#fef08a";
+      ctx.beginPath();
+      ctx.ellipse(15, 0, 5.5, 2.4, 0, 0, Math.PI * 2);
+      ctx.fill();
+      if (Math.sin(ts * 0.025) > 0) {
+        ctx.fillStyle = "#ffffff";
+        ctx.beginPath();
+        ctx.arc(-6, -26, 2.2, 0, Math.PI * 2);
+        ctx.arc(-6, 26, 2.2, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
     ctx.restore();
   }
@@ -605,46 +790,79 @@
           : "#38bdf8";
     const s = c.size;
     const hovered = war.hoveredCarrier === c;
+    const isCarrierClass = c.ent.ship_class === "CARRIER";
 
     ctx.save();
     ctx.translate(x, y);
 
-    // Subtle faction aura ring
+    // Slowly rotating tactical faction shield ring
+    ctx.save();
+    ctx.rotate((t * 0.00035) * (isLong ? 1 : -1));
     ctx.beginPath();
-    ctx.arc(0, 0, s * 1.12, 0, Math.PI * 2);
+    ctx.arc(0, 0, s * 1.18, 0, Math.PI * 2);
     ctx.strokeStyle = hovered ? "#ffffff" : haloCol;
-    ctx.globalAlpha = hovered ? 0.9 : 0.36;
-    ctx.lineWidth = hovered ? 1.8 : 1.1;
-    ctx.setLineDash([4, 3]);
+    ctx.globalAlpha = hovered ? 0.92 : 0.42;
+    ctx.lineWidth = hovered ? 1.9 : 1.15;
+    ctx.setLineDash([5, 4]);
     ctx.stroke();
     ctx.setLineDash([]);
+    ctx.restore();
     ctx.globalAlpha = 1;
 
-    // Carrier stealth hull silhouette facing the frontline
+    // Armored Orbital Dreadnought / Helicarrier hull facing the frontline
     ctx.save();
     if (!isLong) ctx.scale(-1, 1);
-    ctx.fillStyle = isLong ? "rgba(16, 185, 129, 0.22)" : "rgba(244, 63, 94, 0.22)";
+
+    // Dual aft ion thrusters
+    const pulse = 0.7 + Math.sin(t * 0.012 + c.phase) * 0.3;
+    [-s * 0.28, s * 0.28].forEach((ey) => {
+      const tg = ctx.createLinearGradient(-s * (1.0 + pulse * 0.5), ey, -s * 0.72, ey);
+      tg.addColorStop(0, "transparent");
+      tg.addColorStop(1, isLong ? "#38bdf8" : "#f59e0b");
+      ctx.fillStyle = tg;
+      ctx.beginPath();
+      ctx.moveTo(-s * 0.85, ey - s * 0.11);
+      ctx.lineTo(-s * (1.12 + pulse * 0.38), ey);
+      ctx.lineTo(-s * 0.85, ey + s * 0.11);
+      ctx.closePath();
+      ctx.fill();
+    });
+
+    ctx.fillStyle = isLong ? "rgba(16, 185, 129, 0.24)" : "rgba(244, 63, 94, 0.24)";
     ctx.strokeStyle = baseCol;
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = isCarrierClass ? 1.7 : 1.3;
     ctx.shadowColor = baseCol;
-    ctx.shadowBlur = hovered ? 18 : 10;
+    ctx.shadowBlur = hovered ? 20 : 11;
     ctx.beginPath();
-    ctx.moveTo(s * 1.15, 0);
-    ctx.lineTo(s * 0.35, -s * 0.48);
-    ctx.lineTo(-s * 0.85, -s * 0.62);
-    ctx.lineTo(-s * 1.05, -s * 0.22);
-    ctx.lineTo(-s * 0.72, 0);
-    ctx.lineTo(-s * 1.05, s * 0.22);
-    ctx.lineTo(-s * 0.85, s * 0.62);
-    ctx.lineTo(s * 0.35, s * 0.48);
+    ctx.moveTo(s * 1.22, 0);
+    ctx.lineTo(s * 0.52, -s * 0.42);
+    ctx.lineTo(-s * 0.12, -s * 0.56);
+    ctx.lineTo(-s * 0.88, -s * 0.66);
+    ctx.lineTo(-s * 1.08, -s * 0.25);
+    ctx.lineTo(-s * 0.78, 0);
+    ctx.lineTo(-s * 1.08, s * 0.25);
+    ctx.lineTo(-s * 0.88, s * 0.66);
+    ctx.lineTo(-s * 0.12, s * 0.56);
+    ctx.lineTo(s * 0.52, s * 0.42);
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
+    ctx.shadowBlur = 0;
 
-    // Bridge core light
+    // Flight-deck runway centerline & armored rib markings
+    ctx.strokeStyle = "rgba(255,255,255,0.34)";
+    ctx.lineWidth = 0.9;
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.moveTo(s * 0.9, 0);
+    ctx.lineTo(-s * 0.6, 0);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Command bridge reactor core light
     ctx.fillStyle = haloCol;
     ctx.beginPath();
-    ctx.arc(s * 0.15, 0, Math.max(2.5, s * 0.14), 0, Math.PI * 2);
+    ctx.arc(s * 0.18, 0, Math.max(2.6, s * 0.15), 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
 
@@ -783,8 +1001,13 @@
       war.lastHudTs = nowMs;
     }
 
-    // Smooth frontline easing
-    war.frontline += (war.targetFrontline - war.frontline) * Math.min(1, dt * 3.5);
+    // Spring-damper tug-of-war frontline physics: individual strikes physically push & recoil the battle line!
+    const springForce = (war.targetFrontline - war.frontline) * 8.5;
+    war.frontlineVel += springForce * dt;
+    war.frontlineVel *= Math.exp(-4.4 * dt);
+    war.frontline = Math.max(0.14, Math.min(0.86, war.frontline + war.frontlineVel * dt));
+    war.clashPower = Math.max(0, war.clashPower - dt * 2.1);
+
     const W = war.cssW;
     const H = war.cssH;
     const fx = W * war.frontline;
@@ -856,28 +1079,57 @@
       ctx.stroke();
     });
 
-    // Dynamic Battle Frontline Laser
-    const fGrad = ctx.createLinearGradient(fx, 0, fx, H);
-    fGrad.addColorStop(0, "rgba(56, 189, 248, 0.05)");
-    fGrad.addColorStop(0.5, "rgba(56, 189, 248, 0.65)");
-    fGrad.addColorStop(1, "rgba(56, 189, 248, 0.05)");
-    ctx.strokeStyle = fGrad;
-    ctx.lineWidth = 1.6;
-    ctx.setLineDash([6, 4]);
+    // Dynamic Flexing Tug-of-War Plasma Energy Barrier (bows physically on heavy strikes!)
+    const bowPx = (war.clashSide === "LONG" ? 1 : -1) * Math.min(34, war.clashPower * 24 + Math.abs(war.frontlineVel) * 95);
+    const cy = Math.max(36, Math.min(H - 36, war.clashY || H * 0.5));
+    const surgeCol = war.frontlineVel > 0.015 ? "#10b981" : war.frontlineVel < -0.015 ? "#f43f5e" : "#38bdf8";
+
+    ctx.save();
+    // Outer plasma glow wall
+    const wallGrad = ctx.createLinearGradient(fx, 0, fx, H);
+    wallGrad.addColorStop(0, "rgba(56, 189, 248, 0.04)");
+    wallGrad.addColorStop(0.5, surgeCol);
+    wallGrad.addColorStop(1, "rgba(56, 189, 248, 0.04)");
+    ctx.strokeStyle = wallGrad;
+    ctx.lineWidth = 2.4 + war.clashPower * 2.2;
+    ctx.shadowColor = surgeCol;
+    ctx.shadowBlur = 14 + war.clashPower * 16;
     ctx.beginPath();
     ctx.moveTo(fx, 0);
-    ctx.lineTo(fx, H);
+    ctx.quadraticCurveTo(fx + bowPx, cy, fx, H);
+    ctx.stroke();
+
+    // Inner bright core beam
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.55)";
+    ctx.lineWidth = 1.0;
+    ctx.setLineDash([7, 5]);
+    ctx.beginPath();
+    ctx.moveTo(fx, 0);
+    ctx.quadraticCurveTo(fx + bowPx * 0.85, cy, fx, H);
     ctx.stroke();
     ctx.setLineDash([]);
 
-    // Zone Watermarks
+    // Tug-of-war momentum chevrons along the frontline when actively pushing!
+    if (Math.abs(war.frontlineVel) > 0.012 || war.clashPower > 0.25) {
+      const pushingRight = war.frontlineVel >= 0;
+      const pushCol = pushingRight ? "#10b981" : "#f43f5e";
+      const label = pushingRight ? "多军强推 ▶▶" : "◀◀ 空军反推";
+      ctx.font = "700 10px ui-monospace, SFMono-Regular, Menlo, monospace";
+      ctx.fillStyle = pushCol;
+      ctx.textAlign = "center";
+      ctx.fillText(label, Math.max(52, Math.min(W - 52, fx + bowPx * 0.5)), Math.max(36, cy - 16));
+    }
+    ctx.restore();
+
+    // Zone Watermarks (compact on narrow mobile canvas so left/right NEVER collide!)
     ctx.font = "700 10.5px ui-monospace, SFMono-Regular, Menlo, monospace";
-    ctx.fillStyle = "rgba(16, 185, 129, 0.55)";
+    ctx.fillStyle = "rgba(16, 185, 129, 0.58)";
     ctx.textAlign = "left";
-    ctx.fillText("◀ LONG AIRSPACE · 绿军多头", 14, 20);
-    ctx.fillStyle = "rgba(244, 63, 94, 0.6)";
+    ctx.fillText(W < 520 ? "◀ 绿军多头" : "◀ LONG AIRSPACE · 绿军多头", 12, 20);
+    ctx.fillStyle = "rgba(244, 63, 94, 0.62)";
     ctx.textAlign = "right";
-    ctx.fillText("红军空头 · SHORT AIRSPACE ▶", W - 14, 20);
+    ctx.fillText(W < 520 ? "红军空头 ▶" : "红军空头 · SHORT AIRSPACE ▶", W - 12, 20);
 
     // 2. Back Layer — Hovering Real Whale Flagships (clickable!)
     war.hoveredCarrier = null;
@@ -917,22 +1169,30 @@
         ctx.globalAlpha = 1;
       }
 
-      drawAircraft(ctx, p.x, p.y, p.side === "LONG" ? 1 : -1, p.tier, col);
+      drawAircraft(ctx, p.x, p.y, p.side === "LONG" ? 1 : -1, p.tier, col, ts);
 
       // Callout label on heavy $250K+ jets
       if (p.tier >= 3) {
         ctx.font = "700 10px ui-monospace, SFMono-Regular, Menlo, monospace";
         ctx.fillStyle = "#ffffff";
         ctx.textAlign = "center";
-        ctx.fillText(fmtCompact(p.usd), p.x, p.y - (p.tier === 4 ? 26 : 16));
+        ctx.fillText(fmtCompact(p.usd), p.x, p.y - (p.tier === 4 ? 32 : 21));
       }
 
       if (crossed) {
+        // Real directional tug-of-war knockback impulse on frontline!
+        const dirSign = p.side === "LONG" ? 1 : -1;
+        const pushMag = p.tier === 1 ? 0.032 : p.tier === 2 ? 0.115 : p.tier === 3 ? 0.26 : 0.58;
+        war.frontlineVel = Math.max(-0.9, Math.min(0.9, war.frontlineVel + dirSign * pushMag));
+        war.clashY = p.y;
+        war.clashSide = p.side;
+        war.clashPower = Math.min(1.6, war.clashPower + (p.tier === 1 ? 0.12 : p.tier === 2 ? 0.42 : p.tier === 3 ? 0.85 : 1.4));
+
         // Impact sparks & shockwave at battle frontline!
-        const sparkCnt = p.tier === 1 ? 4 : p.tier === 2 ? 9 : p.tier === 3 ? 16 : 26;
+        const sparkCnt = p.tier === 1 ? 5 : p.tier === 2 ? 11 : p.tier === 3 ? 18 : 30;
         for (let k = 0; k < sparkCnt; k++) {
           const ang = Math.random() * Math.PI * 2;
-          const spd = 40 + Math.random() * (p.tier * 55);
+          const spd = 45 + Math.random() * (p.tier * 62);
           war.sparks.push({
             x: fx,
             y: p.y,
@@ -940,18 +1200,29 @@
             vy: Math.sin(ang) * spd,
             life: 1.0,
             color: k % 3 === 0 ? "#ffffff" : col,
-            size: p.tier >= 3 ? 2.3 : 1.4,
+            size: p.tier >= 3 ? 2.4 : 1.5,
           });
         }
         if (p.tier >= 2) {
           war.rings.push({
             x: fx,
             y: p.y,
-            r: 4,
-            maxR: p.tier === 2 ? 24 : p.tier === 3 ? 46 : 78,
+            r: 5,
+            maxR: p.tier === 2 ? 28 : p.tier === 3 ? 54 : 88,
             color: col,
-            alpha: 0.85,
+            alpha: 0.9,
           });
+          if (war.floatingHits.length < 18) {
+            war.floatingHits.push({
+              x: fx + dirSign * 14,
+              y: p.y - 6,
+              vy: -32 - p.tier * 6,
+              text: `${p.side === "LONG" ? "+" : "-"}${fmtCompact(p.usd)}`,
+              color: col,
+              big: p.tier >= 3,
+              alpha: 1.0,
+            });
+          }
         }
         p.alive = false;
       }
@@ -995,6 +1266,24 @@
     }
     war.sparks = nextSparks;
 
+    // 5b. Rising Floating Combat Impact Numbers
+    const nextHits = [];
+    for (const h of war.floatingHits) {
+      h.y += h.vy * dt;
+      h.alpha -= dt * 1.15;
+      if (h.alpha > 0.04) {
+        ctx.save();
+        ctx.globalAlpha = h.alpha;
+        ctx.font = `${h.big ? "800 12px" : "700 10.5px"} ui-monospace, SFMono-Regular, Menlo, monospace`;
+        ctx.fillStyle = h.color;
+        ctx.textAlign = "center";
+        ctx.fillText(h.text, Math.max(34, Math.min(W - 34, h.x)), h.y);
+        ctx.restore();
+        nextHits.push(h);
+      }
+    }
+    war.floatingHits = nextHits;
+
     // 6. Tier 4 Strategic Bomber Tactical Sky-Alert Banner
     if (war.bannerAlpha > 0.02 && war.bannerText) {
       const bCol = war.bannerSide === "LONG" ? "#10b981" : "#f43f5e";
@@ -1022,9 +1311,11 @@
       if (war.hoveredCarrier) {
         const { ent, pos } = war.hoveredCarrier;
         const pnl = ent.alltime_pnl;
+        const levSafe = Number.isFinite(Number(pos.lev)) && Number(pos.lev) > 0 ? ` · ${Number(pos.lev)}x` : "";
         tip.innerHTML = `
-          <div><b>${esc(ent.display)}</b> <span class="muted">(${esc(ent.tier_label)})</span></div>
-          <div class="${pos.side === "LONG" ? "ok" : "risk"}">${esc(pos.coin)} ${pos.side === "LONG" ? "做多" : "做空"} <b>${fmtCompact(pos.usd)}</b></div>
+          <div><b>${esc(ent.display)}</b>${ent.x_handle && /^[A-Za-z0-9_]{2,15}$/.test(ent.x_handle) ? ` <span style="color:#38bdf8;">𝕏 @${esc(ent.x_handle)}</span>` : ""} <span class="muted">(${esc(ent.tier_label)})</span></div>
+          <div class="${pos.side === "LONG" ? "ok" : "risk"}">${esc(pos.coin)} ${pos.side === "LONG" ? "做多" : "做空"} <b>${fmtCompact(pos.usd)}</b>${esc(levSafe)}</div>
+          ${pos.entry_px ? `<div class="muted small mono">开仓 $${Number(pos.entry_px).toLocaleString()}${pos.liq_px ? ` · 强平 $${Number(pos.liq_px).toLocaleString()}` : ""}</div>` : ""}
           <div class="muted">全账户总仓位 ${fmtCompact(ent.total_notional_usd)} · ${ent.addr_count} 址归并</div>
           ${pnl != null ? `<div class="${pnl >= 0 ? "ok" : "risk"}">历史实盘 PnL: <b>${fmtSignedCompact(pnl)}</b></div>` : ""}
           <div style="color:#38bdf8;margin-top:2px;">点击展开单舰完整持仓档案 →</div>
@@ -1161,7 +1452,9 @@
         `<span class="regime-chip">实盘建档 <b>${Number(st.profiled_whales || 0).toLocaleString()}</b> 鲸</span>`,
         `<span class="regime-chip">在役方向实体 <b>${Number(st.active_entities || 0)}</b> 个</span>`,
         `<span class="regime-chip">在场总名义仓位 <b>${fmtCompact(st.total_active_notional_usd)}</b></span>`,
-      ].join("");
+        st.x_linked_count ? `<span class="regime-chip">公开 𝕏 账号 <b>${Number(st.x_linked_count)}</b> 席</span>` : "",
+        st.profile_coverage_pct ? `<span class="regime-chip">建档完整度 <b>${Number(st.profile_coverage_pct).toFixed(0)}%</b></span>` : "",
+      ].filter(Boolean).join("");
     }
 
     // Faction Confrontation Panel (follows activeCohortCoin: ALL / BTC / ETH / HYPE / SOL)
@@ -1266,9 +1559,15 @@
         if (!hasCoin) return false;
       }
       if (war.filterSide !== "ALL" && f.primary_side !== war.filterSide) return false;
-      if (q && !`${f.display} ${f.short_addr} ${f.primary_coin} ${f.tier_label}`.toLowerCase().includes(q)) return false;
+      if (war.filterXOnly && !f.x_handle) return false;
+      if (q && !`${f.display} ${f.x_handle || ""} ${f.short_addr} ${f.primary_coin} ${f.tier_label}`.toLowerCase().includes(q)) return false;
       return true;
     });
+
+    const safeXUrl = (f) =>
+      f.x_handle && /^[A-Za-z0-9_]{2,15}$/.test(f.x_handle)
+        ? `https://x.com/${f.x_handle}`
+        : "";
 
     const shipBadge = (sc) =>
       sc === "CARRIER"
@@ -1293,13 +1592,18 @@
             const sideCls = f.primary_side === "LONG" ? "ok" : "risk";
             const actCls = f.action === "反手" ? "pill-risk" : f.action === "加仓" ? "pill-info" : f.action === "减仓" ? "pill-warn" : "pill-muted";
             const pnl = f.alltime_pnl;
+            const xUrl = safeXUrl(f);
             return `
           <tr class="fleet-row" data-eid="${esc(f.id)}" style="cursor:pointer;">
             <td>
               <div class="fleet-entity">
                 ${shipBadge(f.ship_class)}
                 <div>
-                  <div class="mono"><b>${esc(f.display)}</b>${f.addr_count > 1 ? ` <span class="sess-tag">${f.addr_count}址归并</span>` : ""}</div>
+                  <div class="mono fleet-name-row">
+                    <b>${esc(f.display)}</b>
+                    ${xUrl ? `<a class="whale-x-pill" href="${esc(xUrl)}" target="_blank" rel="noopener noreferrer" title="访问公开 X 主页 @${esc(f.x_handle)}">𝕏 @${esc(f.x_handle)}</a>` : ""}
+                    ${f.addr_count > 1 ? `<span class="sess-tag">${f.addr_count}址归并</span>` : ""}
+                  </div>
                   ${f.display !== f.short_addr ? `<div class="muted small mono">${esc(f.short_addr)}</div>` : ""}
                 </div>
               </div>
@@ -1320,6 +1624,9 @@
           .join("")
       : `<tr><td colspan="6" class="muted">暂无匹配筛选条件的在役巨鲸实体</td></tr>`;
 
+    tbody.querySelectorAll(".whale-x-pill").forEach((a) => {
+      a.addEventListener("click", (ev) => ev.stopPropagation());
+    });
     tbody.querySelectorAll(".fleet-row").forEach((tr) => {
       tr.addEventListener("click", () => {
         const hit = all.find((x) => x.id === tr.dataset.eid);
@@ -1334,30 +1641,68 @@
     if (!drawer || !backdrop) return;
 
     const pnl = ent.alltime_pnl;
+    const mpnl = ent.month_pnl;
     $("wd-title").textContent = `${ent.display} · ${ent.ship_label}`;
+    const xBadge = $("wd-x-badge");
+    if (xBadge) {
+      const validHandle = ent.x_handle && /^[A-Za-z0-9_]{2,15}$/.test(ent.x_handle) ? ent.x_handle : "";
+      xBadge.innerHTML = validHandle
+        ? `<a class="whale-x-pill whale-x-pill-lg" href="https://x.com/${esc(validHandle)}" target="_blank" rel="noopener noreferrer">𝕏 @${esc(validHandle)} ↗</a>`
+        : "";
+    }
     $("wd-sub").textContent = `${ent.short_addr} · ${ent.addr_count} 个关联地址去重合并 · ${ent.tier_label}`;
 
     $("wd-kpis").innerHTML = [
       { k: "总名义仓位", v: fmtCompact(ent.total_notional_usd), cls: "" },
       { k: "全仓净敞口", v: fmtSignedCompact(ent.net_usd), cls: ent.net_usd >= 0 ? "ok" : "risk" },
       { k: "历史实盘 PnL", v: pnl != null ? fmtSignedCompact(pnl) : "--", cls: pnl != null ? (pnl >= 0 ? "ok" : "risk") : "" },
+      { k: "近 30 日 PnL", v: mpnl != null ? fmtSignedCompact(mpnl) : "--", cls: mpnl != null ? (mpnl >= 0 ? "ok" : "risk") : "" },
       { k: "Hyperliquid 权益", v: ent.account_value ? fmtCompact(ent.account_value) : "--", cls: "" },
+      { k: "近 7 日 PnL", v: ent.week_pnl != null ? fmtSignedCompact(ent.week_pnl) : "--", cls: ent.week_pnl != null ? (ent.week_pnl >= 0 ? "ok" : "risk") : "" },
     ]
       .map((x) => `<div class="stat-tile"><small>${esc(x.k)}</small><strong class="${x.cls}">${esc(x.v)}</strong></div>`)
       .join("");
+
+    const fmtPx = (v) => {
+      const n = Number(v);
+      if (!Number.isFinite(n) || n <= 0) return "--";
+      return `$${n.toLocaleString("en-US", { maximumFractionDigits: n < 10 ? 4 : 2 })}`;
+    };
 
     const maxPos = Math.max(1, ...(ent.positions || []).map((p) => p.usd));
     $("wd-positions").innerHTML = (ent.positions || [])
       .map((p) => {
         const w = Math.max(4, (p.usd / maxPos) * 100);
         const col = p.side === "LONG" ? "var(--ok)" : "var(--risk)";
+        const levSafeNum = Number.isFinite(Number(p.lev)) && Number(p.lev) > 0 ? Number(p.lev) : null;
+        const levTxt = levSafeNum
+          ? `${levSafeNum}x${p.lev_type === "isolated" ? "逐仓" : p.lev_type === "cross" ? "全仓" : p.lev_type === "mixed" ? "混合" : ""}`
+          : "";
+        const liqLabel = p.legs && p.legs > 1 ? "最近强平" : "强平";
+        const upnlHtml = p.upnl != null ? `<span class="${p.upnl >= 0 ? "ok" : "risk"}">浮${p.upnl >= 0 ? "盈" : "亏"} ${fmtSignedCompact(p.upnl)}</span>` : "";
+        const liqDist =
+          p.liq_px && p.mark_px && p.mark_px > 0
+            ? ` (${(((p.liq_px - p.mark_px) / p.mark_px) * 100).toFixed(1)}%)`
+            : "";
         return `
         <div class="wd-pos-row">
           <div class="wd-pos-top mono">
-            <span><b>${esc(p.coin)}</b> <span class="${p.side === "LONG" ? "ok" : "risk"}">${p.side === "LONG" ? "LONG" : "SHORT"}</span></span>
+            <span>
+              <b>${esc(p.coin)}</b>
+              <span class="${p.side === "LONG" ? "ok" : "risk"}">${p.side === "LONG" ? "LONG" : "SHORT"}</span>
+              ${levTxt ? `<span class="sess-tag">${esc(levTxt)}</span>` : ""}
+            </span>
             <span><b>${fmtCompact(p.usd)}</b></span>
           </div>
           <div class="wd-pos-bar"><i style="width:${w.toFixed(0)}%;background:${col};"></i></div>
+          ${
+            p.entry_px || p.liq_px || p.upnl != null
+              ? `<div class="wd-pos-meta mono">
+                  <span>${p.entry_px ? `开仓 ${fmtPx(p.entry_px)}` : ""}${p.liq_px ? `${p.entry_px ? " · " : ""}${liqLabel} ${fmtPx(p.liq_px)}${liqDist}` : ""}</span>
+                  ${upnlHtml}
+                </div>`
+              : ""
+          }
         </div>`;
       })
       .join("");
@@ -1407,7 +1752,7 @@
       war.lastFrameTs = performance.now();
       war.rafId = requestAnimationFrame(tick);
       connectSockets();
-      if (war.soundOn && war.pausedByHidden && !document.hidden) {
+      if (!war.userMuted && !document.hidden && (war.soundOn || war.pausedByHidden)) {
         playCurrentAnthem(false);
       }
     }
@@ -1418,6 +1763,7 @@
     if (war.rafId) cancelAnimationFrame(war.rafId);
     war.rafId = null;
     disconnectSockets();
+    disarmGestureUnlock();
     stopAnthem(true);
   }
 
@@ -1469,6 +1815,12 @@
       renderFleetTable();
     });
 
+    $("btn-war-x-only")?.addEventListener("click", () => {
+      war.filterXOnly = !war.filterXOnly;
+      $("btn-war-x-only").classList.toggle("btn-accent-ghost", war.filterXOnly);
+      renderFleetTable();
+    });
+
     $("war-fleet-search")?.addEventListener("input", (e) => {
       war.search = e.target.value;
       renderFleetTable();
@@ -1478,14 +1830,18 @@
 
     $("btn-war-sound")?.addEventListener("click", () => {
       if (war.soundOn) {
+        war.userMuted = true;
+        disarmGestureUnlock();
         stopAnthem(false);
       } else {
+        war.userMuted = false;
         war.audioErrCount = 0;
         playCurrentAnthem(false);
       }
     });
 
     $("war-audio-prompt")?.addEventListener("click", () => {
+      war.userMuted = false;
       war.audioErrCount = 0;
       playCurrentAnthem(false);
     });
@@ -1493,12 +1849,52 @@
     $("war-track-select")?.addEventListener("change", (e) => {
       const idx = Number(e.target.value);
       if (!Number.isInteger(idx) || idx < 0 || idx >= WAR_TRACKS.length) return;
+      war.userMuted = false;
       war.audioErrCount = 0;
       war.trackIdx = idx;
       playCurrentAnthem(true);
     });
 
-    $("btn-war-next-track")?.addEventListener("click", () => nextTrack(true));
+    $("btn-war-next-track")?.addEventListener("click", () => {
+      war.userMuted = false;
+      nextTrack(true);
+    });
+
+    $("war-local-file")?.addEventListener("change", (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      if (war.localBlobUrl) {
+        try { URL.revokeObjectURL(war.localBlobUrl); } catch {}
+      }
+      war.localBlobUrl = URL.createObjectURL(file);
+      const cleanName = String(file.name || "自定义战歌").replace(/\.[^.]+$/, "").slice(0, 18);
+      const customIdx = WAR_TRACKS.findIndex((t) => t.id === "local_custom");
+      const entry = {
+        id: "local_custom",
+        file: war.localBlobUrl,
+        label: `🎵 本地 · ${cleanName}`,
+        short: `🎵 ${cleanName}`,
+        dur: 30,
+      };
+      const sel = $("war-track-select");
+      if (customIdx >= 0) {
+        WAR_TRACKS[customIdx] = entry;
+        war.trackIdx = customIdx;
+        if (sel && sel.options[customIdx]) sel.options[customIdx].textContent = entry.label;
+      } else {
+        WAR_TRACKS.push(entry);
+        war.trackIdx = WAR_TRACKS.length - 1;
+        if (sel) {
+          const opt = document.createElement("option");
+          opt.value = String(war.trackIdx);
+          opt.textContent = entry.label;
+          sel.appendChild(opt);
+        }
+      }
+      war.userMuted = false;
+      war.audioErrCount = 0;
+      playCurrentAnthem(true);
+    });
 
     $("war-vol")?.addEventListener("input", (e) => {
       const pct = Number(e.target.value);
