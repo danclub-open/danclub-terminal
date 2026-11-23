@@ -284,7 +284,7 @@ def _classify_eqn_item(channels: list[str], text: str, src_name: str) -> tuple[s
     chs = set(channels)
     src_low = (src_name or "").strip().lower()
     if "earn" in chs or ("alpha" in chs and re.search(r"(?:空投|积分|认购|奖励|Yield|APR|年化|理财|Simple\s*Earn|瓜分)", text, re.IGNORECASE)):
-        return "EARN", "理财·羊毛"
+        return "EARN", "理财·活动"
     if chs & {"binance", "korea", "tier2", "tier3", "alpha"}:
         return "LISTING", "上新·公告"
     if chs & {"tradfi", "tfmoves"}:
@@ -366,7 +366,7 @@ def _promo_semantic_key(exchange: str, title: str, summary: str, earn_cat: str =
 def _classify_earn_promo(title: str, summary: str, tier: str) -> tuple[str, str]:
     txt = f"{title} {summary}"
     if tier == "WARN" or re.search(r"(?:Trading\s+Competition|交易竞赛|刷量|交易量排名|反撸)", txt, re.IGNORECASE):
-        return "WARN", "慎防反撸"
+        return "WARN", "高磨损预警"
     # Strip explicit negation clauses like "无Alpha积分或空投" / "不含空投" so Earn promos never misclassify as Airdrops
     neg_term = r"(?:Alpha\s*积分|空投|Airdrop|打新|认购|徽章加成|奖励)"
     airdrop_txt = re.sub(
@@ -1263,7 +1263,7 @@ def _clean_bundle(bundle: dict[str, Any], *, blocklist_path: Path | None = None)
                     "tag": "全网强平脉冲",
                     "title": f"近 1 小时全网强平达 ${tot_1h / 1e6:.1f}M（{dom_txt}）",
                     "metric": f"1h ${tot_1h / 1e6:.1f}M",
-                    "detail": f"爆多 ${lng_1h / 1e6:.1f}M vs 爆空 ${sht_1h / 1e6:.1f}M · 点击进爆仓战情室",
+                    "detail": f"爆多 ${lng_1h / 1e6:.1f}M vs 爆空 ${sht_1h / 1e6:.1f}M · 点击查看多空与爆仓",
                     "target_tab": "war",
                 })
 
@@ -1274,16 +1274,16 @@ def _clean_bundle(bundle: dict[str, Any], *, blocklist_path: Path | None = None)
         cc = btc_coh.get("COUNTER_C") or {}
         injected_war_sigs.append({
             "severity": "danger" if float(div["spread_pct"]) < 0 else "opportunity",
-            "tag": "巨鲸阵营背离",
-            "title": "BTC 聪明钱 vs 反指巨鲸对撞",
-            "metric": f"差值 {float(div['spread_pct']):+.1f}%",
-            "detail": f"S级聪明钱 {sa.get('notional_long_pct', 0):.0f}%多 vs C级反指 {cc.get('notional_long_pct', 0):.0f}%多 · 点击进爆仓战情室",
+            "tag": "大户持仓背离",
+            "title": "BTC 聪明钱 vs 反向指标对峙",
+            "metric": f"差值 {float(div['spread_pct']):+.1f}pp",
+            "detail": f"S级盈利大户 {sa.get('notional_long_pct', 0):.0f}%多 vs C级反指 {cc.get('notional_long_pct', 0):.0f}%多 · 点击查看多空与爆仓",
             "target_tab": "war",
         })
 
     sigs = bundle["overview"].get("desk_signals")
     if isinstance(sigs, list):
-        sigs = [s for s in sigs if isinstance(s, dict) and s.get("tag") not in ("全网强平脉冲", "巨鲸阵营背离")]
+        sigs = [s for s in sigs if isinstance(s, dict) and s.get("tag") not in ("全网强平脉冲", "巨鲸阵营背离", "大户持仓背离")]
         sev_rank = {"danger": 0, "warn": 1, "opportunity": 2, "info": 3}
         merged_sigs = [*injected_war_sigs, *sigs]
         merged_sigs.sort(key=lambda s: sev_rank.get(str(s.get("severity") or "info"), 3))

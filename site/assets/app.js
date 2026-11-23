@@ -629,7 +629,7 @@
         p.chg !== null && p.chg !== undefined && Number.isFinite(Number(p.chg))
           ? `<span class="chg ${dirCls(p.chg)}">${fmtSignedPct(p.chg, 2)}</span>`
           : ""
-      }${p.sess ? `<span class="sess${p.isBstock ? " sess-bstock" : ""}">${esc(p.sess)}</span>` : ""}</div>`;
+      }${p.sess ? `<span class="sess${p.isBstock ? " sess-bstock" : ""}"${p.isBstock ? ' title="币安现货 bStocks 映射产品报价：美股休市期间仍可独立波动，与标的股票实际价格可能存在偏差"' : ""}>${esc(p.sess)}</span>` : ""}</div>`;
 
     ribbon.innerHTML =
       cryptoPills.map(renderPill).join("") +
@@ -662,7 +662,7 @@
     if (reg.vix !== null && reg.vix !== undefined) chips.push(`VIX <b>${fmtNum(reg.vix, 2)}</b>`);
     if (reg.us10y !== null && reg.us10y !== undefined) chips.push(`US10Y <b>${fmtNum(reg.us10y, 3)}%</b>`);
     if (tga && Number.isFinite(Number(tga.bal_b))) {
-      chips.push(`TGA <b>$${fmtNum(tga.bal_b, 1)}B</b> <span class="muted">(5d ${fmtSignedNum(tga.chg_5d_b, 1)}B)</span>`);
+      chips.push(`<span title="美国财政部在美联储的一般账户余额；余额变动对市场美元流动性的影响需结合其他项目综合判断">TGA <b>$${fmtNum(tga.bal_b, 1)}B</b> <span class="muted">(5d ${fmtSignedNum(tga.chg_5d_b, 1)}B)</span></span>`);
     }
     $("regime-chips").innerHTML = chips.map((c) => `<span class="regime-chip">${c}</span>`).join("");
 
@@ -763,10 +763,18 @@
         </div>
       </article>
 
-      <article class="card kpi-card">
+      <article class="card kpi-card" title="Strategy 官方 mNAV（企业价值 / BTC 储备市值）：低于 1.0x 表示企业价值低于所持 BTC 储备市值">
         <div class="kpi-head">
           <span class="kpi-label">Strategy (MSTR) mNAV</span>
-          <span class="kpi-scope">${mstr && mstr.mnav < 1.0 ? "低于净资产" : "相对溢价"}</span>
+          <span class="kpi-scope">${
+            mstr && strictNum(mstr.mnav) !== null
+              ? mstr.mnav < 1.0
+                ? "低于 1.0x"
+                : mstr.mnav > 1.0
+                  ? "高于 1.0x"
+                  : "等于 1.0x"
+              : "--"
+          }</span>
         </div>
         <strong class="kpi-value ${mstr && mstr.mnav < 1.0 ? "warn" : ""}">${mstr ? `${fmtNum(mstr.mnav, 3)}x` : "--"}</strong>
         <div class="kpi-sub mono">
@@ -1242,14 +1250,15 @@
     // Hyperliquid
     const hl = fl.hyperliquid || {};
     $("hl-kpis").innerHTML = [
-      { k: "全网总持仓 OI", v: fmtCompact(hl.platform?.total_oi_usd), s: `24h 成交额 ${fmtCompact(hl.platform?.total_vol_usd)}` },
+      { k: "全网总持仓 OI", v: fmtCompact(hl.platform?.total_oi_usd), s: `24h 成交额 ${fmtCompact(hl.platform?.total_vol_usd)}`, tip: "" },
       {
         k: "援助基金 (AF) 持有 HYPE",
         v: hl.assistance_fund ? `${fmtNum(hl.assistance_fund.hype / 1e6, 2)}M` : "--",
         s: hl.assistance_fund?.hype_chg_24h != null ? `24h 增持 ${fmtSignedNum(hl.assistance_fund.hype_chg_24h, 0)} HYPE` : "--",
+        tip: "Hyperliquid 援助基金（Assistance Fund）：使用协议交易手续费自动购入 HYPE 的链上基金",
       },
     ]
-      .map((x) => `<div class="stat-tile"><small>${esc(x.k)}</small><strong>${esc(x.v)}</strong><span>${esc(x.s)}</span></div>`)
+      .map((x) => `<div class="stat-tile"${x.tip ? ` title="${esc(x.tip)}"` : ""}><small>${esc(x.k)}</small><strong>${esc(x.v)}</strong><span>${esc(x.s)}</span></div>`)
       .join("");
     $("hl-tbody").innerHTML = (hl.top_markets || [])
       .map(
@@ -1307,9 +1316,9 @@
     $("dca-disclaimer").textContent = dca.disclaimer || "";
     const strats = dca.strategies || {};
     const stratOrder = [
-      { key: "FIXED", short: "固定定投 (FIXED)", color: "#38bdf8" },
-      { key: "VA", short: "价值平均 (VA)", color: "#10b981" },
-      { key: "MAFG", short: "均线+恐慌 (MAFG)", color: "#f59e0b" },
+      { key: "FIXED", short: "固定定投 (FIXED)", tip: "每日每标的固定投入 100U，作为对照基准", color: "#38bdf8" },
+      { key: "VA", short: "价值平均 (VA)", tip: "按目标组合市值与实际市值之差动态调整投入金额", color: "#10b981" },
+      { key: "MAFG", short: "均线+恐慌 (MAFG)", tip: "结合 200 日均线与恐慌指数对每日定投额做倍率加权", color: "#f59e0b" },
     ].filter((s) => strats[s.key]);
 
     const firstDays = strats.FIXED?.days || strats[stratOrder[0]?.key]?.days || 0;
@@ -1343,7 +1352,7 @@
 
     // Dynamic thead & tbody matching active strategies (ZERO empty `--` columns; highlight per-asset leader!)
     $("dca-asset-thead").innerHTML =
-      `<th>标的</th>` + stratOrder.map((st) => `<th class="num">${esc(st.short)}</th>`).join("");
+      `<th>标的</th>` + stratOrder.map((st) => `<th class="num" title="${esc(st.tip || "")}">${esc(st.short)}</th>`).join("");
     const assets = Object.keys(strats[stratOrder[0]?.key]?.per_asset_ret_pct || {});
     $("dca-asset-tbody").innerHTML = assets
       .map((a) => {
@@ -1372,7 +1381,7 @@
       const ec = p.earn_cat || (p.tier === "WARN" ? "WARN" : "CAMPAIGN");
       if (pCounts[ec] !== undefined) pCounts[ec] += 1;
     });
-    const pLabels = { ALL: "全部", HIGH_YIELD: "高息理财", AIRDROP: "空投·打新", CAMPAIGN: "常规活动", WARN: "慎防反撸" };
+    const pLabels = { ALL: "全部", HIGH_YIELD: "高息理财", AIRDROP: "空投·打新", CAMPAIGN: "常规活动", WARN: "高磨损预警" };
     $("promo-cat-filter")?.querySelectorAll(".seg-btn").forEach((btn) => {
       const c = btn.dataset.cat;
       btn.textContent = `${pLabels[c] || c} (${pCounts[c] ?? 0})`;
@@ -1390,7 +1399,7 @@
             const ec = p.earn_cat || (p.tier === "WARN" ? "WARN" : "CAMPAIGN");
             const tierCls =
               ec === "WARN" ? "pill-warn" : ec === "HIGH_YIELD" ? "pill-ok" : ec === "AIRDROP" ? "pill-cushion" : "pill-muted";
-            const badgeText = p.earn_cat_label || p.tier_label || p.worth_level;
+            const badgeText = pLabels[ec] || p.earn_cat_label || p.tier_label || p.worth_level;
             const createdTs = strictNum(p.created_at);
             const winText =
               p.window ||
@@ -1416,7 +1425,7 @@
           </article>`;
           })
           .join("")
-      : `<div class="muted small">当前分类暂无在期理财或羊毛活动</div>`;
+      : `<div class="muted small">当前分类暂无在期理财或激励活动</div>`;
   }
 
   /* ---------- Feed Sound Alerts, Chinese TTS & Live Unread Detection ---------- */
@@ -1768,7 +1777,7 @@
       CRYPTO: "加密快讯",
       MACRO: "美股·宏观",
       LISTING: "上新·公告",
-      EARN: "理财·羊毛",
+      EARN: "理财·活动",
       MOVES: "异动·OI",
       INTEL: "深度预警",
     };

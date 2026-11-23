@@ -163,7 +163,7 @@
     lastFrameTs: 0,
     lastHudTs: 0,
     ambientTimer: 0,
-    danmakuOn: safeStoreGet("danclub_war_danmaku", "0") === "1",
+    danmakuOn: false,
     danmakuActive: [],
     danmakuQueue: [],
     dmSpawnCooldown: 0,
@@ -238,6 +238,45 @@
     const mi = String(d.getUTCMinutes()).padStart(2, "0");
     return `${mm}-${dd} ${hh}:${mi}`;
   };
+
+  /* Friendly display mapping strictly for Hyperliquid HIP-3 xyz:* on-chain equity/commodity perps */
+  const HIP3_XYZ_MAP = {
+    XYZ100: "纳指100永续",
+    SP500: "标普500永续",
+    GOLD: "黄金永续",
+    SILVER: "白银永续",
+    BRENTOIL: "布伦特原油永续",
+    CL: "WTI原油永续",
+    NVDA: "英伟达 NVDA",
+    TSLA: "特斯拉 TSLA",
+    AAPL: "苹果 AAPL",
+    GOOGL: "谷歌 GOOGL",
+    MSFT: "微软 MSFT",
+    META: "Meta",
+    MSTR: "Strategy MSTR",
+    COIN: "Coinbase COIN",
+    CRCL: "Circle CRCL",
+    SOXL: "半导体3x SOXL",
+    ANT: "Anthropic",
+  };
+
+  function fmtCoinLabel(raw) {
+    const s = String(raw || "").trim();
+    const colonIdx = s.indexOf(":");
+    if (colonIdx <= 0) return { text: s, title: s, isHip3: false };
+    const ns = s.slice(0, colonIdx).toLowerCase();
+    if (ns !== "xyz") return { text: s, title: s, isHip3: false };
+    const base = s.slice(colonIdx + 1).toUpperCase();
+    const mapped = HIP3_XYZ_MAP[base];
+    if (!mapped) {
+      return { text: s, title: `Hyperliquid HIP-3 链上永续合约 ${s}`, isHip3: true };
+    }
+    return {
+      text: `${mapped} (链上)`,
+      title: `Hyperliquid HIP-3 链上永续合约 ${s}`,
+      isHip3: true,
+    };
+  }
 
   /* ---------- 6-Track Hybrid War Anthem Radio (Official YouTube IFrame + Local MP3) + SFX ---------- */
   function setYtPipOpen(open, titleText = null) {
@@ -1881,13 +1920,13 @@
     if (lblR) lblR.textContent = `${(100 - clampedLong).toFixed(1)}%`;
     if (verdict) {
       if (clampedLong >= 58) {
-        verdict.textContent = "多军压制";
+        verdict.textContent = "多头占优";
         verdict.className = "pill pill-ok";
       } else if (clampedLong <= 42) {
-        verdict.textContent = "空军主导";
+        verdict.textContent = "空头主导";
         verdict.className = "pill pill-risk";
       } else {
-        verdict.textContent = "两军拉锯";
+        verdict.textContent = "多空均衡";
         verdict.className = "pill pill-warn";
       }
     }
@@ -2037,7 +2076,7 @@
     if (Math.abs(war.frontlineVel) > 0.012 || war.clashPower > 0.25) {
       const pushingRight = war.frontlineVel >= 0;
       const pushCol = pushingRight ? "#10b981" : "#f43f5e";
-      const label = pushingRight ? "多军强推 ▶▶" : "◀◀ 空军反推";
+      const label = pushingRight ? "买盘推进 ▶▶" : "◀◀ 卖盘压制";
       ctx.font = "700 10px ui-monospace, SFMono-Regular, Menlo, monospace";
       ctx.fillStyle = pushCol;
       ctx.textAlign = "center";
@@ -2049,10 +2088,10 @@
     ctx.font = "700 10.5px ui-monospace, SFMono-Regular, Menlo, monospace";
     ctx.fillStyle = "rgba(16, 185, 129, 0.58)";
     ctx.textAlign = "left";
-    ctx.fillText(W < 520 ? "◀ 绿军多头" : "◀ LONG AIRSPACE · 绿军多头", 12, 20);
+    ctx.fillText(W < 520 ? "◀ 多头主买" : "◀ LONG FLOW · 多头主动买盘与持仓大户", 12, 20);
     ctx.fillStyle = "rgba(244, 63, 94, 0.62)";
     ctx.textAlign = "right";
-    ctx.fillText(W < 520 ? "红军空头 ▶" : "红军空头 · SHORT AIRSPACE ▶", W - 12, 20);
+    ctx.fillText(W < 520 ? "空头主卖 ▶" : "空头主动卖盘与持仓大户 · SHORT FLOW ▶", W - 12, 20);
 
     // 2. Back Layer — Hovering Real Whale Flagships (clickable!)
     war.hoveredCarrier = null;
@@ -2318,7 +2357,7 @@
     ctx.fillStyle = "#eef2f6";
     ctx.font = "700 22px -apple-system, BlinkMacSystemFont, PingFang SC, sans-serif";
     ctx.fillText(
-      `Smart − Counter 背离度：${sp !== null ? `${sp > 0 ? "+" : ""}${sp.toFixed(1)}%` : "--"}   |   ${div.label || "实盘监控中"}`,
+      `聪明钱 − 反指 多头占比差：${sp !== null ? `${sp > 0 ? "+" : ""}${sp.toFixed(1)}pp` : "--"}   |   ${div.label || "实盘监控中"}`,
       78,
       192,
       1044
@@ -2469,7 +2508,7 @@
 
     ctx.fillStyle = "#38bdf8";
     ctx.font = "700 17px -apple-system, BlinkMacSystemFont, PingFang SC, sans-serif";
-    ctx.fillText(`${coin} 实盘旗舰清算引力墙（单所精确强平价）`, 638, 510, 482);
+    ctx.fillText(`${coin} 实盘大户强平分布（单所精确强平价）`, 638, 510, 482);
 
     const mag = war.data?.liq_magnets?.[coin];
     const lw = mag && typeof mag === "object" && mag.long_wall && typeof mag.long_wall === "object" ? mag.long_wall : null;
@@ -2531,12 +2570,12 @@
     const st = w.stats || {};
     if ($("war-stats-bar")) {
       $("war-stats-bar").innerHTML = [
-        `<span class="regime-chip">追踪巨鲸库 <b>${Number(st.tracked_addresses || 0).toLocaleString()}</b> 址</span>`,
-        `<span class="regime-chip">实盘建档 <b>${Number(st.profiled_whales || 0).toLocaleString()}</b> 鲸</span>`,
-        `<span class="regime-chip">在役方向实体 <b>${Number(st.active_entities || 0)}</b> 个</span>`,
+        `<span class="regime-chip" title="持续追踪的链上高净值地址总数">追踪地址库 <b>${Number(st.tracked_addresses || 0).toLocaleString()}</b></span>`,
+        `<span class="regime-chip" title="已完成历史实盘盈亏建档的地址数">实盘建档 <b>${Number(st.profiled_whales || 0).toLocaleString()}</b></span>`,
+        `<span class="regime-chip" title="同一主体多地址去重后当前持仓的大户实体数">活跃持仓大户 <b>${Number(st.active_entities || 0)}</b></span>`,
         `<span class="regime-chip">在场总名义仓位 <b>${fmtCompact(st.total_active_notional_usd)}</b></span>`,
-        st.x_linked_count ? `<span class="regime-chip">公开 𝕏 账号 <b>${Number(st.x_linked_count)}</b> 席</span>` : "",
-        st.profile_coverage_pct ? `<span class="regime-chip">建档完整度 <b>${Number(st.profile_coverage_pct).toFixed(0)}%</b></span>` : "",
+        st.x_linked_count ? `<span class="regime-chip">公开 𝕏 账号 <b>${Number(st.x_linked_count)}</b></span>` : "",
+        st.profile_coverage_pct ? `<span class="regime-chip" title="在役实盘大户中已完成历史盈亏建档的实体比例">建档覆盖率 <b>${Number(st.profile_coverage_pct).toFixed(0)}%</b></span>` : "",
       ].filter(Boolean).join("");
     }
 
@@ -2549,10 +2588,10 @@
 
     const divBox = $("war-div-banner");
     if (divBox) {
-      const sp = div.spread_pct;
+      const sp = strictNum(div.spread_pct);
       const cls = div.tone === "danger" ? "pill-risk" : div.tone === "bullish" ? "pill-ok" : div.tone === "warn" ? "pill-warn" : "pill-muted";
       divBox.innerHTML = `
-        <span class="pill ${cls}">Smart − Counter 背离度: ${sp != null ? `${sp > 0 ? "+" : ""}${sp.toFixed(1)}%` : "--"}</span>
+        <span class="pill ${cls}" title="S/A盈利大户多头名义占比减去C级反指多头名义占比（单位：百分点 pp；各组多空方向需结合各自占比相对 50% 判断）">聪明钱 − 反指 多头占比差: ${sp !== null ? `${sp > 0 ? "+" : ""}${sp.toFixed(1)}pp` : "--"}</span>
         <span class="small" style="color:var(--text-2);font-weight:600;">${esc(div.label || "数据更新中")}</span>
       `;
     }
@@ -2643,7 +2682,15 @@
       }
       if (war.filterSide !== "ALL" && f.primary_side !== war.filterSide) return false;
       if (war.filterXOnly && !f.x_handle) return false;
-      if (q && !`${f.display} ${f.x_handle || ""} ${f.short_addr} ${f.primary_coin} ${f.tier_label}`.toLowerCase().includes(q)) return false;
+      if (q) {
+        const coinDisp = fmtCoinLabel(f.primary_coin).text;
+        const posList = Array.isArray(f.positions) ? f.positions : [];
+        const allPosDisp = posList
+          .filter((p) => p && typeof p.coin === "string")
+          .map((p) => `${p.coin} ${fmtCoinLabel(p.coin).text}`)
+          .join(" ");
+        if (!`${f.display || ""} ${f.x_handle || ""} ${f.short_addr || ""} ${f.primary_coin || ""} ${coinDisp} ${allPosDisp} ${f.tier_label || ""}`.toLowerCase().includes(q)) return false;
+      }
       return true;
     });
 
@@ -2654,10 +2701,17 @@
 
     const shipBadge = (sc) =>
       sc === "CARRIER"
-        ? `<span class="ship-tag ship-carrier" title="航空母舰 ≥$50M">航母</span>`
+        ? `<span class="ship-tag ship-carrier" title="特大户：总名义仓位 ≥$50M">≥50M</span>`
         : sc === "CRUISER"
-          ? `<span class="ship-tag ship-cruiser" title="巡洋舰 $10M-$50M">巡洋</span>`
-          : `<span class="ship-tag ship-destroyer" title="驱逐舰 $1M-$10M">驱逐</span>`;
+          ? `<span class="ship-tag ship-cruiser" title="大户：总名义仓位 $10M–$50M">≥10M</span>`
+          : `<span class="ship-tag ship-destroyer" title="中大户：总名义仓位 $1M–$10M">≥1M</span>`;
+
+    const tierTipMap = {
+      S: "S级：历史实盘持续高额盈利，核心聪明钱样本",
+      A: "A级：历史实盘盈利稳健，聪明钱观察样本",
+      C: "C级：历史实盘持续亏损，常作反向拥挤度参考",
+      F: "F级：高关注度公开大户，独立记录不混入S/C均值",
+    };
 
     const tierPill = (f) => {
       const cls =
@@ -2666,12 +2720,13 @@
           : f.tier_code === "C"
             ? "pill-violet"
             : "pill-muted";
-      return `<span class="pill ${cls}">${esc(f.tier_label)}</span>`;
+      const tip = tierTipMap[f.tier_code] || "链上实盘大户分层";
+      return `<span class="pill ${cls}" title="${esc(tip)}">${esc(f.tier_label)}</span>`;
     };
 
     const freshEl = $("war-fleet-freshness");
     if (freshEl && war.data?.updated_at) {
-      freshEl.textContent = `链上快照 ${fmtTimeShort(war.data.updated_at)} BJT · 每 15 分钟实盘核验 · 已平仓实体自动剔除`;
+      freshEl.textContent = `链上快照 ${fmtTimeShortBjt(war.data.updated_at)} BJT · 每 15 分钟实盘核验 · 已平仓大户自动剔除`;
     }
 
     tbody.innerHTML = filtered.length
@@ -2681,6 +2736,7 @@
             const actCls = f.action === "反手" ? "pill-risk" : f.action === "加仓" ? "pill-info" : f.action === "减仓" ? "pill-warn" : "pill-muted";
             const pnl = f.alltime_pnl;
             const xUrl = safeXUrl(f);
+            const pCoin = fmtCoinLabel(f.primary_coin);
             return `
           <tr class="fleet-row" data-eid="${esc(f.id)}" style="cursor:pointer;">
             <td>
@@ -2697,8 +2753,8 @@
               </div>
             </td>
             <td>${tierPill(f)}</td>
-            <td class="mono">
-              <span class="${sideCls}"><b>${esc(f.primary_coin)} ${f.primary_side === "LONG" ? "多" : "空"}</b></span>
+            <td class="mono" title="${esc(pCoin.title)}">
+              <span class="${sideCls}"><b>${esc(pCoin.text)} ${f.primary_side === "LONG" ? "多" : "空"}</b></span>
               <span class="muted"> ${fmtCompact(f.primary_usd)}</span>
             </td>
             <td class="num hide-xs"><b>${fmtCompact(f.total_notional_usd)}</b></td>
@@ -2710,7 +2766,7 @@
           </tr>`;
           })
           .join("")
-      : `<tr><td colspan="6" class="muted">暂无匹配筛选条件的在役巨鲸实体</td></tr>`;
+      : `<tr><td colspan="6" class="muted">暂无匹配筛选条件的活跃实盘大户</td></tr>`;
 
     tbody.querySelectorAll(".whale-x-pill").forEach((a) => {
       a.addEventListener("click", (ev) => ev.stopPropagation());
@@ -2730,7 +2786,8 @@
 
     const pnl = ent.alltime_pnl;
     const mpnl = ent.month_pnl;
-    $("wd-title").textContent = `${ent.display} · ${ent.ship_label}`;
+    const sizeTierLbl = ent.ship_class === "CARRIER" ? "特大户 ≥$50M" : ent.ship_class === "CRUISER" ? "大户 ≥$10M" : "中大户 ≥$1M";
+    $("wd-title").textContent = `${ent.display} · ${sizeTierLbl}`;
     const xBadge = $("wd-x-badge");
     if (xBadge) {
       const validHandle = ent.x_handle && /^[A-Za-z0-9_]{2,15}$/.test(ent.x_handle) ? ent.x_handle : "";
@@ -2738,7 +2795,7 @@
         ? `<a class="whale-x-pill whale-x-pill-lg" href="https://x.com/${esc(validHandle)}" target="_blank" rel="noopener noreferrer">𝕏 @${esc(validHandle)} ↗</a>`
         : "";
     }
-    $("wd-sub").textContent = `${ent.short_addr} · ${ent.addr_count} 个关联地址去重合并 · ${ent.tier_label} · 链上快照 ${fmtTimeShort(war.data?.updated_at)} BJT`;
+    $("wd-sub").textContent = `${ent.short_addr} · ${ent.addr_count} 个关联地址去重合并 · ${ent.tier_label} · 链上快照 ${fmtTimeShortBjt(war.data?.updated_at)} BJT`;
 
     $("wd-kpis").innerHTML = [
       { k: "总名义仓位", v: fmtCompact(ent.total_notional_usd), cls: "" },
@@ -2773,12 +2830,13 @@
           p.liq_px && p.mark_px && p.mark_px > 0
             ? ` (${(((p.liq_px - p.mark_px) / p.mark_px) * 100).toFixed(1)}%)`
             : "";
+        const pCoin = fmtCoinLabel(p.coin);
         return `
         <div class="wd-pos-row">
           <div class="wd-pos-top mono">
-            <span>
-              <b>${esc(p.coin)}</b>
-              <span class="${p.side === "LONG" ? "ok" : "risk"}">${p.side === "LONG" ? "LONG" : "SHORT"}</span>
+            <span title="${esc(pCoin.title)}">
+              <b>${esc(pCoin.text)}</b>
+              <span class="${p.side === "LONG" ? "ok" : "risk"}">${p.side === "LONG" ? "多" : "空"}</span>
               ${levTxt ? `<span class="sess-tag">${esc(levTxt)}</span>` : ""}
               ${venueTag ? `<span class="sess-tag">${esc(venueTag)}</span>` : ""}
             </span>
@@ -2807,7 +2865,7 @@
           "wd-chart",
           [
             {
-              name: "全仓净敞口 (M$)",
+              name: "全仓净敞口 ($M)",
               color: ent.net_usd >= 0 ? "#10b981" : "#f43f5e",
               points: hist.map((h) => ({
                 label: fmtTimeShort(h.ts),
@@ -3542,15 +3600,15 @@
     longs.sort((a, b) => a.liveDist - b.liveDist || b.usd - a.usd);
     shorts.sort((a, b) => a.liveDist - b.liveDist || b.usd - a.usd);
 
-    const redCount =
-      longs.filter((x) => x.liveDist < 5).length + shorts.filter((x) => x.liveDist < 5).length;
+    const redEntCount = new Set([...longs, ...shorts].filter((x) => x.liveDist < 5).map((x) => x.id)).size;
+    const totalEntCount = new Set([...longs, ...shorts].map((x) => x.id)).size;
 
     if (alertEl) {
-      if (redCount > 0) {
-        alertEl.textContent = `红血警戒 · ${redCount}舰距强平<5%`;
+      if (redEntCount > 0) {
+        alertEl.textContent = `高危警戒 · ${redEntCount}户距强平<5%`;
         alertEl.className = "pill pill-risk mag-alert";
-      } else if (longs.length + shorts.length > 0) {
-        alertEl.textContent = `监测 ${longs.length + shorts.length} 艘单所旗舰`;
+      } else if (totalEntCount > 0) {
+        alertEl.textContent = `监测 ${totalEntCount} 户单所大户`;
         alertEl.className = "pill pill-info mag-alert";
       } else {
         alertEl.textContent = "±25%内无近端强平";
@@ -3581,17 +3639,17 @@
       const topL = longs[0];
       const sumL = longs.reduce((acc, x) => acc + x.usd, 0);
       const cntL = new Set(longs.map((x) => x.id)).size;
-      longEl.textContent = `⬇ 多头强平墙：最近 ${fmtPxShort(topL.liq_px)} (-${topL.liveDist.toFixed(1)}%) · 25%内 ${fmtCompact(sumL)} (${cntL}舰)`;
+      longEl.textContent = `⬇ 多头强平区：最近 ${fmtPxShort(topL.liq_px)} (-${topL.liveDist.toFixed(1)}%) · 25%内 ${fmtCompact(sumL)} (${cntL}户)`;
     } else {
-      longEl.textContent = "⬇ 多头强平墙：25%内无单所旗舰强平位";
+      longEl.textContent = "⬇ 多头强平区：25%内无单所大户强平位";
     }
     if (shorts.length) {
       const topS = shorts[0];
       const sumS = shorts.reduce((acc, x) => acc + x.usd, 0);
       const cntS = new Set(shorts.map((x) => x.id)).size;
-      shortEl.textContent = `⬆ 空头强平墙：最近 ${fmtPxShort(topS.liq_px)} (+${topS.liveDist.toFixed(1)}%) · 25%内 ${fmtCompact(sumS)} (${cntS}舰)`;
+      shortEl.textContent = `⬆ 空头强平区：最近 ${fmtPxShort(topS.liq_px)} (+${topS.liveDist.toFixed(1)}%) · 25%内 ${fmtCompact(sumS)} (${cntS}户)`;
     } else {
-      shortEl.textContent = "⬆ 空头强平墙：25%内无单所旗舰强平位";
+      shortEl.textContent = "⬆ 空头强平区：25%内无单所大户强平位";
     }
 
     // Edge-triggered radar alert ONLY when a verified HL flagship newly crosses into <3% critical zone (5m cooldown)
@@ -3872,7 +3930,7 @@
       WHALE: whaleRows.length,
       WICK: wickRows.length,
     };
-    const lblMap = { ALL: "全部", LIQ: "强平单", WHALE: "巨鲸调仓", WICK: "插针预警" };
+    const lblMap = { ALL: "全部", LIQ: "强平单", WHALE: "大户调仓", WICK: "插针预警" };
     $("liq-feed-filter")
       ?.querySelectorAll(".seg-btn")
       .forEach((b) => {
@@ -3918,16 +3976,17 @@
       const mv = r.data;
       const winTxt = mv.delta_window_h ? `${mv.delta_window_h}h · 快照` : "快照";
       const dirTxt = mv.side === "LONG" ? "多" : "空";
+      const mvCoin = fmtCoinLabel(mv.coin);
       return `
-        <div class="liq-item kind-whale" data-ent-id="${esc(mv.id)}" title="点击查看该实盘巨鲸完整持仓档案">
+        <div class="liq-item kind-whale" data-ent-id="${esc(mv.id)}" title="点击查看该实盘大户完整持仓档案">
           <div class="liq-item-top">
-            <span class="liq-tag liq-tag-whale">巨鲸调仓</span>
+            <span class="liq-tag liq-tag-whale">大户调仓</span>
             <span class="liq-ex-pill">${esc(mv.tier_code)}级</span>
             <span class="liq-coin-lbl">${esc(mv.display)}</span>
             <span class="liq-ts">${esc(winTxt)}</span>
           </div>
-          <div class="liq-item-body">
-            主仓 ${esc(mv.coin)}（偏${dirTxt}）<b>${esc(mv.action)}</b> · 全账户净变动 <b class="${mv.delta_usd >= 0 ? "ok" : "risk"}">${fmtSignedCompact(mv.delta_usd)}</b>
+          <div class="liq-item-body" title="${esc(mvCoin.title)}">
+            主仓 ${esc(mvCoin.text)}（偏${dirTxt}）<b>${esc(mv.action)}</b> · 全账户净变动 <b class="${mv.delta_usd >= 0 ? "ok" : "risk"}">${fmtSignedCompact(mv.delta_usd)}</b>
           </div>
         </div>`;
     };
@@ -3943,12 +4002,12 @@
         blocks.push(...wickRows.slice(0, 4).map(renderRow));
       }
       if (whaleRows.length) {
-        blocks.push(`<div class="liq-sec-head"><span>实盘旗舰调仓（点击查档）</span><span class="mono">${whaleRows.length} 条</span></div>`);
+        blocks.push(`<div class="liq-sec-head"><span>实盘大户调仓（点击查档）</span><span class="mono">${whaleRows.length} 条</span></div>`);
         blocks.push(...whaleRows.slice(0, 8).map(renderRow));
       }
       feedEl.innerHTML = blocks.length
         ? blocks.join("")
-        : `<div class="dm-empty">当前筛选条件下暂无${filterCoin ? ` ${esc(filterCoin)}` : ""} 爆仓或巨鲸异动记录</div>`;
+        : `<div class="dm-empty">当前筛选条件下暂无${filterCoin ? ` ${esc(filterCoin)}` : ""} 爆仓或大户异动记录</div>`;
       return;
     }
 
@@ -3978,7 +4037,6 @@
       war.rafId = requestAnimationFrame(tick);
       connectSockets();
       connectLiqSockets();
-      startBarragePolling();
       loadYouTubeApi(4500).catch(() => {});
       if (!war.userMuted && !document.hidden && (war.soundOn || war.pausedByHidden)) {
         playCurrentAnthem(false);

@@ -991,11 +991,13 @@ class TestExporterIntegrityAndHygiene(unittest.TestCase):
             self.assertEqual(len(w["recent_moves"]), 1)
             self.assertEqual(w["recent_moves"][0]["action"], "加仓")
 
-        # 3. Verify V1 UI elements & strict ctVal guard in war_arena.js
+        # 3. Verify V1/V1.5 pure-trading UI elements (social barrage removed!) & strict ctVal guard in war_arena.js
         html = (ROOT / "site" / "index.html").read_text(encoding="utf-8")
         war_js = (ROOT / "site" / "assets" / "war_arena.js").read_text(encoding="utf-8")
-        for needle in ('id="war-liq-magnet"', 'id="war-mag-crowd"', 'id="liq-rhythm-bars"', 'id="btn-war-liq-beep"', 'id="war-rail-tabs"', 'id="war-rail-liq"', 'id="war-liq-feed"', 'id="liq-scope-group"'):
+        for needle in ('id="war-liq-magnet"', 'id="war-mag-crowd"', 'id="liq-rhythm-bars"', 'id="btn-war-liq-beep"', 'id="war-rail-liq"', 'id="war-liq-feed"', 'id="liq-scope-group"'):
             self.assertIn(needle, html)
+        for removed in ('id="btn-war-danmaku"', 'id="war-rail-chat"', 'id="dm-form"', "前线弹幕"):
+            self.assertNotIn(removed, html)
         for needle in (
             "ensureOkxCtValMap",
             "connectOkxLiqSocket",
@@ -1046,6 +1048,10 @@ class TestExporterIntegrityAndHygiene(unittest.TestCase):
             syncer._classify_earn_promo("WSOT 2026 更新：降低交易量门槛", "战队争霸赛热身挑战", "LOW_RISK"),
             ("CAMPAIGN", "常规活动"),
         )
+        self.assertEqual(
+            syncer._classify_earn_promo("Alpha 交易竞赛：刷交易量瓜分奖池", "按交易量排名瓜分", "WARN"),
+            ("WARN", "高磨损预警"),
+        )
 
         # 2. _clean_bundle 1h liquidation pulse: freshness, consistency, thresholds, direction, malformed survival & priority
         with tempfile.TemporaryDirectory() as td:
@@ -1092,7 +1098,7 @@ class TestExporterIntegrityAndHygiene(unittest.TestCase):
                 }
                 return b
 
-            # 2a. Fresh $28.5M long-skewed -> warn, "多头偏重", absolute wording, updated "爆仓战情室"
+            # 2a. Fresh $28.5M long-skewed -> warn, "多头偏重", absolute wording, aligned "多空与爆仓"
             cleaned_warn = syncer._clean_bundle(make_liq_bundle(28_500_000.0, 20_500_000.0, 8_000_000.0), blocklist_path=Path("/nonexistent"))
             liq_sig = next((s for s in cleaned_warn["overview"]["desk_signals"] if s.get("tag") == "全网强平脉冲"), None)
             self.assertIsNotNone(liq_sig)
@@ -1100,10 +1106,11 @@ class TestExporterIntegrityAndHygiene(unittest.TestCase):
             self.assertEqual(liq_sig["target_tab"], "war")
             self.assertEqual(liq_sig["metric"], "1h $28.5M")
             self.assertIn("多头偏重", liq_sig["title"])
-            self.assertIn("爆仓战情室", liq_sig["detail"])
-            whale_sig = next((s for s in cleaned_warn["overview"]["desk_signals"] if s.get("tag") == "巨鲸阵营背离"), None)
+            self.assertIn("多空与爆仓", liq_sig["detail"])
+            whale_sig = next((s for s in cleaned_warn["overview"]["desk_signals"] if s.get("tag") == "大户持仓背离"), None)
             self.assertIsNotNone(whale_sig)
-            self.assertIn("爆仓战情室", whale_sig["detail"])
+            self.assertEqual(whale_sig["metric"], "差值 -65.0pp")
+            self.assertIn("多空与爆仓", whale_sig["detail"])
             self.assertNotIn("空战战情室", whale_sig["detail"])
 
             # 2b. Fresh $40M balanced ($20M/$20M) -> danger + "多空均衡" (NOT false "多头集中"!)
@@ -1187,12 +1194,43 @@ const rowVals = [-3.0, "   ", []].map(helpers.strictNum);
 const valid = rowVals.filter((x) => x !== null);
 assert.strictEqual(valid.length, 1);
 
-// B. Test war_arena.js exportBattlePoster edge cases via Canvas mock
+// B. Test war_arena.js fmtCoinLabel, malformed positions search safety, & exportBattlePoster edge cases via Canvas mock
 const warSrc = fs.readFileSync(process.argv[2], "utf8");
 const mWarStrict = warSrc.match(/function strictNum\(v\)[\s\S]*?^  \}/m);
-const mWarFmts = warSrc.match(/const fmtCompact = [\s\S]*?^  const fmtTimeShortBjt = [\s\S]*?^  \};/m);
+const mWarFmts = warSrc.match(/const fmtCompact = [\s\S]*?^  function fmtCoinLabel\(raw\)[\s\S]*?^  \}/m);
 const mPoster = warSrc.match(/function exportBattlePoster\(\)[\s\S]*?^  \}/m);
-assert(mWarStrict && mWarFmts && mPoster, "war_arena.js poster helpers not found");
+const mStartArena = warSrc.match(/function startArena\(\)[\s\S]*?^  \}/m);
+assert(mWarStrict && mWarFmts && mPoster && mStartArena, "war_arena.js helpers not found");
+assert(!mStartArena[0].includes("startBarragePolling"), "startArena must NOT trigger social barrage polling");
+const coinHelpers = vm.runInNewContext(mWarStrict[0] + "\n" + mWarFmts[0] + "\n({ fmtCoinLabel });");
+assert.strictEqual(coinHelpers.fmtCoinLabel("xyz:XYZ100").text, "纳指100永续 (链上)");
+assert.strictEqual(coinHelpers.fmtCoinLabel("xyz:GOLD").text, "黄金永续 (链上)");
+assert.strictEqual(coinHelpers.fmtCoinLabel("xyz:CUSTOM").text, "xyz:CUSTOM");
+assert.strictEqual(coinHelpers.fmtCoinLabel("other:GOLD").text, "other:GOLD");
+assert.strictEqual(coinHelpers.fmtCoinLabel("BTC").text, "BTC");
+// Verify REAL production renderFleetTable tolerates non-array positions + null entries AND matches secondary leg xyz:GOLD!
+const mFleet = warSrc.match(/function renderFleetTable\(\)[\s\S]*?^  \}/m);
+assert(mFleet, "renderFleetTable not found in war_arena.js");
+const tbodyMock = { innerHTML: "", querySelectorAll() { return []; } };
+const fleetSandbox = {
+  $: (id) => (id === "war-fleet-tbody" ? tbodyMock : null),
+  esc: (v) => String(v ?? ""),
+  war: {
+    filterTier: "ALL", filterCoin: "ALL", filterSide: "ALL", filterXOnly: false, search: "黄金永续",
+    data: {
+      updated_at: 1795436600,
+      flagships: [
+        { id: "bad1", display: "BrokenPos", short_addr: "0x1", primary_coin: "BTC", primary_side: "LONG", primary_usd: 1e6, total_notional_usd: 1e6, action: "持仓", tier_code: "S", tier_label: "S级", ship_class: "CRUISER", addr_count: 1, positions: "not-an-array" },
+        { id: "ok1", display: "GoldSubLeg", short_addr: "0x2", primary_coin: "BTC", primary_side: "SHORT", primary_usd: 5e6, total_notional_usd: 8e6, action: "持仓", tier_code: "S", tier_label: "S级", ship_class: "CRUISER", addr_count: 1, positions: [null, { coin: 123 }, { coin: "xyz:GOLD" }] },
+      ],
+    },
+  },
+  openEntityDrawer() {},
+  Date, Math, Number, String, Boolean, Object, Array,
+};
+vm.runInNewContext(mWarStrict[0] + "\n" + mWarFmts[0] + "\n" + mFleet[0] + "\nrenderFleetTable();", fleetSandbox);
+assert(tbodyMock.innerHTML.includes("GoldSubLeg"), "Production renderFleetTable must match secondary xyz:GOLD leg");
+assert(!tbodyMock.innerHTML.includes("BrokenPos"), "Malformed non-array record must not crash or falsely match");
 
 function runPoster(warData) {
   const texts = [];

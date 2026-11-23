@@ -98,11 +98,11 @@
 
       <div class="container nav-shell">
         <nav class="nav-tabs" aria-label="终端频道导航">
-          <button class="nav-tab active" data-tab="war" type="button">多空战情室 · 巨鲸</button>
+          <button class="nav-tab active" data-tab="war" type="button">多空与爆仓</button>
           <button class="nav-tab" data-tab="overview" type="button">总览</button>
           <button class="nav-tab" data-tab="arb" type="button">跨市场套利</button>
           <button class="nav-tab" data-tab="flows" type="button">资金流与杠杆</button>
-          <button class="nav-tab" data-tab="earn" type="button">理财羊毛</button>
+          <button class="nav-tab" data-tab="earn" type="button">理财与活动</button>
           <button class="nav-tab" data-tab="dca" type="button">模拟定投</button>
           <button class="nav-tab" data-tab="feed" type="button">市场快讯<span class="nav-badge" id="nav-feed-badge" hidden>0</span></button>
           <button class="nav-tab" data-tab="open" type="button">开放 API</button>
@@ -234,13 +234,13 @@
         </div>
       </section>
 
-      <!-- TAB 1: TACTICAL AIR-BATTLE WAR ROOM & WHALE RADAR -->
+      <!-- TAB 1: LIVE ORDERFLOW, LIQUIDATION RADAR & WHALE POSITION MONITOR -->
       <section class="tab-panel active" id="tab-war">
         <article class="card war-arena-card" id="war-arena-card">
           <div class="card-head wrap-head">
             <div>
-              <p class="eyebrow">LIVE LIQUIDATION RADAR · REAL WHALE FLAGSHIPS</p>
-              <h2>多空爆仓战情室（绿军多头 vs 红军空头）</h2>
+              <p class="eyebrow">LIVE ORDERFLOW &amp; LIQUIDATION RADAR</p>
+              <h2>多空成交流与全网爆仓监控</h2>
             </div>
             <div class="war-toolbar">
               <div class="seg-group seg-sm" id="war-coin-tabs">
@@ -249,8 +249,7 @@
                 <button class="seg-btn" data-coin="SOL" type="button">SOL</button>
                 <button class="seg-btn" data-coin="HYPE" type="button">HYPE</button>
               </div>
-              <button class="btn btn-compact btn-toggle-active" id="btn-war-liq-beep" type="button" aria-pressed="true" title="大额强平（≥$10万）或实盘旗舰临界强平（<3%）独立雷达提示音，静音战歌时依然有效">强平音 开</button>
-              <button class="btn btn-compact btn-danmaku-toggle" id="btn-war-danmaku" type="button" title="开启或隐藏战场飞屏弹幕">弹幕 关</button>
+              <button class="btn btn-compact btn-toggle-active" id="btn-war-liq-beep" type="button" aria-pressed="true" title="大额强平（≥$10万）或单所大户临界强平（<3%）独立提示音，静音背景音乐时依然有效">强平音 开</button>
               <button class="btn btn-compact" id="btn-war-poster" type="button">导出战报图</button>
               <button class="btn btn-compact btn-accent-ghost" id="btn-war-fullscreen" type="button">副屏全屏</button>
             </div>
@@ -258,8 +257,8 @@
 
           <!-- 6-Track Climax War Anthem & Combat Audio Deck -->
           <div class="war-audio-bar" id="war-audio-bar">
-            <button class="btn btn-compact btn-war-audio" id="btn-war-sound" type="button" title="点击一键开启或关闭背景战歌与空战音效">▶ 开启战歌</button>
-            <select class="war-track-select" id="war-track-select" aria-label="选择多国战歌高潮">
+            <button class="btn btn-compact btn-war-audio" id="btn-war-sound" type="button" title="点击一键开启或关闭背景音乐与成交音效">▶ 开启战歌</button>
+            <select class="war-track-select" id="war-track-select" aria-label="选择背景曲目">
               <option value="0" selected>🇩🇪 大德意志是我的家乡 (30s高潮)</option>
               <option value="1">🇩🇪 德 · 女武神的骑行 (25s)</option>
               <option value="2">🇷🇺 俄 · 1812礼炮终章 (26s)</option>
@@ -267,23 +266,23 @@
               <option value="4">🇫🇷 法 · 卡门斗牛士 (26s)</option>
               <option value="5">🇬🇧 英 · 火星战争使者 (24s)</option>
             </select>
-            <button class="btn btn-compact" id="btn-war-next-track" type="button" title="切换下一首高潮战歌">切歌 ⏭</button>
-            <label class="btn btn-compact war-local-btn" title="纯本地挂载任意 MP3 战歌，绝不上传服务器">
-              + 本地战歌
+            <button class="btn btn-compact" id="btn-war-next-track" type="button" title="切换下一首曲目">切歌 ⏭</button>
+            <label class="btn btn-compact war-local-btn" title="纯本地挂载任意 MP3 音频，绝不上传服务器">
+              + 本地音频
               <input id="war-local-file" type="file" accept="audio/*" hidden />
             </label>
-            <label class="war-vol-wrap" title="调节战歌与空战音效音量">
+            <label class="war-vol-wrap" title="调节背景音乐与提示音量">
               <span class="muted small">音量</span>
-              <input class="war-vol-slider" id="war-vol" type="range" min="0" max="100" value="75" aria-label="战歌音量" />
+              <input class="war-vol-slider" id="war-vol" type="range" min="0" max="100" value="75" aria-label="音量" />
             </label>
             <span class="war-now-playing mono small muted" id="war-audio-status">默认首曲：🇩🇪 大德意志是我的家乡 · 点击页面任意处开播</span>
           </div>
 
-          <!-- Battle Power Bar -->
+          <!-- Directional Momentum Bar -->
           <div class="war-power-head">
-            <div class="war-side-lbl ok mono">多军战力 <b id="war-pct-long">50.0%</b></div>
-            <span class="pill pill-warn" id="war-verdict">两军拉锯</span>
-            <div class="war-side-lbl risk mono"><b id="war-pct-short">50.0%</b> 空军战力</div>
+            <div class="war-side-lbl ok mono" title="综合近 60 秒实时主动买卖盘占比 (60%) 与实盘大户方向敞口 (40%) 计算">多头动能 <b id="war-pct-long">50.0%</b></div>
+            <span class="pill pill-warn" id="war-verdict">多空均衡</span>
+            <div class="war-side-lbl risk mono" title="综合近 60 秒实时主动买卖盘占比 (60%) 与实盘大户方向敞口 (40%) 计算"><b id="war-pct-short">50.0%</b> 空头动能</div>
           </div>
           <div class="war-power-track">
             <div class="war-bar-long" id="war-power-long" style="width:50%;"></div>
@@ -306,11 +305,11 @@
               </div>
 
               <!-- Real Verified Single-Venue Whale Liquidation Magnet Ruler -->
-              <div class="war-liq-magnet" id="war-liq-magnet" aria-label="实盘旗舰清算引力标尺">
+              <div class="war-liq-magnet" id="war-liq-magnet" aria-label="实盘大户强平分布标尺">
                 <div class="mag-head">
                   <div class="mag-title-group">
-                    <span class="mag-title">实盘旗舰清算引力标尺</span>
-                    <span class="pill pill-muted mag-src">单所精确强平价 · ±25%</span>
+                    <span class="mag-title">实盘大户强平分布标尺</span>
+                    <span class="pill pill-muted mag-src" title="仅展示可取得精确强平价的单所持仓">单所精确强平价 · ±25%</span>
                   </div>
                   <div class="mag-mark mono" id="war-mag-mark">BTC --</div>
                   <span class="pill pill-muted mag-alert" id="war-mag-alert">监测中</span>
@@ -326,8 +325,8 @@
                   <span class="mag-axis-lbl mono">+25%</span>
                 </div>
                 <div class="mag-foot mono small">
-                  <span class="ok" id="war-mag-long">⬇ 多头强平墙：加载中…</span>
-                  <span class="risk" id="war-mag-short">⬆ 空头强平墙：加载中…</span>
+                  <span class="ok" id="war-mag-long">⬇ 多头强平区：加载中…</span>
+                  <span class="risk" id="war-mag-short">⬆ 空头强平区：加载中…</span>
                 </div>
                 <div class="mag-crowd mono small" id="war-mag-crowd">
                   <span class="muted">杠杆拥挤度：加载中…</span>
@@ -335,25 +334,17 @@
               </div>
             </div>
 
-            <!-- Right Tactical Rail: Default Pure Trading Real-Time Loss & Kill Feed | Optional Frontline Chat -->
-            <aside class="war-chat-rail" aria-label="实时战损与战术情报台">
+            <!-- Right Pure-Trading Rail: CoinGlass Liquidation Scoreboard & Live Event Stream -->
+            <aside class="war-chat-rail" aria-label="全网实时爆仓与异动台">
               <div class="war-rail-head">
-                <div class="seg-group seg-xs" id="war-rail-tabs" role="tablist" aria-label="情报台视图切换">
-                  <button class="seg-btn active" data-rail="liq" type="button" role="tab" aria-selected="true">实时战损</button>
-                  <button class="seg-btn" data-rail="chat" type="button" role="tab" aria-selected="false">前线弹幕 <span class="mono" id="dm-count-badge">0</span></button>
-                </div>
+                <span class="war-rail-title">全网爆仓与大额异动</span>
                 <div class="seg-group seg-xs" id="liq-win-group">
                   <button class="seg-btn active" data-win="24h" type="button">24h</button>
                   <button class="seg-btn" data-win="1h" type="button">1h</button>
                 </div>
-                <div class="seg-group seg-xs" id="dm-filter-group" hidden>
-                  <button class="seg-btn active" data-side="ALL" type="button">全</button>
-                  <button class="seg-btn" data-side="LONG" type="button">多</button>
-                  <button class="seg-btn" data-side="SHORT" type="button">空</button>
-                </div>
               </div>
 
-              <!-- Pane 1 (Default): CoinGlass 10-Exchange Liquidation Scoreboard + Typed Kill & Whale Move Feed -->
+              <!-- Pure Trading Pane: CoinGlass Multi-Exchange Liquidation Scoreboard + Typed Event Stream -->
               <div class="war-rail-pane" id="war-rail-liq">
                 <div class="liq-board">
                   <div class="liq-board-top">
@@ -384,11 +375,11 @@
                 <div class="liq-filter-bar" id="liq-feed-filter">
                   <button class="seg-btn active" data-kind="ALL" type="button">全部</button>
                   <button class="seg-btn" data-kind="LIQ" type="button">强平单</button>
-                  <button class="seg-btn" data-kind="WHALE" type="button">巨鲸调仓</button>
+                  <button class="seg-btn" data-kind="WHALE" type="button">大户调仓</button>
                   <button class="seg-btn" data-kind="WICK" type="button">插针预警</button>
                 </div>
                 <div class="war-msg-list" id="war-liq-feed">
-                  <div class="dm-empty">正在载入 CoinGlass 全网爆仓与实盘巨鲸异动…</div>
+                  <div class="dm-empty">正在载入 CoinGlass 全网爆仓与实盘大户异动…</div>
                 </div>
                 <div class="war-rail-foot small muted">
                   <span class="dm-sync-dot" id="liq-ws-dot"></span>
@@ -396,72 +387,14 @@
                   <span class="dm-foot-hint mono">≥$2.5万</span>
                 </div>
               </div>
-
-              <!-- Pane 2 (Optional): Live Frontline Message Wall + Compact Input -->
-              <div class="war-rail-pane" id="war-rail-chat" hidden>
-                <div class="war-rail-pulse">
-                  <div class="war-rail-pulse-meta small mono">
-                    <span class="muted">24h 弹幕声量</span>
-                    <span>
-                      <b class="ok" id="dm-pulse-long">多 50%</b>
-                      <span class="muted">·</span>
-                      <b class="risk" id="dm-pulse-short">空 50%</b>
-                    </span>
-                  </div>
-                  <div class="war-rail-pulse-track">
-                    <div class="war-bar-long" id="dm-pulse-bar-long" style="width:50%;"></div>
-                    <div class="war-bar-short" id="dm-pulse-bar-short" style="width:50%;"></div>
-                  </div>
-                </div>
-                <div class="war-msg-list" id="dm-msg-list">
-                  <div class="dm-pin">
-                    <span class="dm-badge dm-badge-sys">前线弹幕</span>
-                    <span>支持匿名留盘面观点；点击任意留言可重放弹幕。</span>
-                  </div>
-                </div>
-                <form class="war-chat-form" id="dm-form" autocomplete="off">
-                  <div class="war-chat-form-row">
-                    <div class="dm-side-group" id="dm-side-group" role="group" aria-label="选择发言阵营">
-                      <button class="dm-side-btn active is-long" data-side="LONG" type="button">多</button>
-                      <button class="dm-side-btn is-short" data-side="SHORT" type="button">空</button>
-                      <button class="dm-side-btn is-neutral" data-side="NEUTRAL" type="button">观</button>
-                    </div>
-                    <input
-                      class="dm-nick-input"
-                      id="dm-nick"
-                      type="text"
-                      maxlength="16"
-                      placeholder="昵称(选)"
-                      aria-label="发言昵称"
-                    />
-                  </div>
-                  <div class="war-chat-form-row">
-                    <input
-                      class="dm-text-input"
-                      id="dm-input"
-                      type="text"
-                      maxlength="80"
-                      placeholder="输入盘面观点回车发送…"
-                      aria-label="弹幕与留言内容"
-                    />
-                    <button class="btn btn-compact dm-send-btn is-long" id="btn-dm-send" type="submit">发送</button>
-                  </div>
-                </form>
-                <div class="dm-feedback small" id="dm-feedback" aria-live="polite"></div>
-                <div class="war-rail-foot small muted">
-                  <span class="dm-sync-dot" id="dm-sync-dot"></span>
-                  <span id="dm-sync-status">接入前线弹幕信道…</span>
-                  <span class="dm-foot-hint">文明交流</span>
-                </div>
-              </div>
             </aside>
           </div>
 
           <div class="war-legend-row">
-            <span><b class="ok">主动成交战机</b> &lt;$5万光束 / ≥$5万轻机 / ≥$25万重机 / ≥$100万轰炸</span>
-            <span><b class="warn">琥珀爆环</b> 实时强平空袭（OKX/BN 实盘爆仓）</span>
-            <span><b class="risk">母舰血条</b> 单所精确距强平%（&lt;5% 红血闪烁 · 点击查持仓）</span>
-            <span><b style="color:#a855f7;">金环[S] / 紫环[C]</b> 聪明钱 vs 反指巨鲸</span>
+            <span><b class="ok">主动成交流</b> &lt;$5万 / ≥$5万 / ≥$25万 / ≥$100万（绿买红卖）</span>
+            <span><b class="warn">强平冲击环</b> OKX / Binance 实时爆仓单</span>
+            <span><b class="risk">持仓安全垫</b> 单所距强平价%（&lt;5% 高危预警 · 点击看持仓）</span>
+            <span><b style="color:#a855f7;">金环[S/A] / 紫环[C]</b> 长期盈利聪明钱 vs 长期亏损反指</span>
           </div>
         </article>
 
@@ -470,8 +403,8 @@
           <article class="card">
             <div class="card-head wrap-head">
               <div>
-                <p class="eyebrow">SMART MONEY VS COUNTER-WHALE CONFRONTATION</p>
-                <h2>实体去重阵营对峙仪（聪明钱 vs 反指巨鲸）</h2>
+                <p class="eyebrow">SMART MONEY VS COUNTER-INDICATOR POSITIONING</p>
+                <h2>聪明钱 vs 反向指标 · 多空持仓对峙</h2>
               </div>
               <div class="seg-group seg-sm" id="war-cohort-tabs">
                 <button class="seg-btn" data-coin="ALL" type="button">全品种</button>
@@ -481,6 +414,9 @@
                 <button class="seg-btn" data-coin="SOL" type="button">SOL</button>
               </div>
             </div>
+            <p class="card-note">
+              按链上历史实盘盈亏分层：S/A 级为长期稳定盈利大户，C 级为历史持续亏损反向观察样本；同一主体多地址已去重归并。
+            </p>
             <div class="war-stats-bar" id="war-stats-bar"></div>
             <div class="war-div-banner" id="war-div-banner"></div>
             <div class="war-factions-grid" id="war-factions-grid"></div>
@@ -490,12 +426,12 @@
             <div class="card-head">
               <div>
                 <p class="eyebrow">SMART-COUNTER DIVERGENCE TRAJECTORY</p>
-                <h2>阵营多头占比背离曲线</h2>
+                <h2>聪明钱与反指多头占比曲线</h2>
               </div>
               <span class="muted small">15m 实体去重快照</span>
             </div>
             <p class="card-note">
-              对比 S/A 级聪明钱与 C 级反指巨鲸的资金多头占比演进；50% 虚线为多空平衡线。
+              追踪 S/A 级盈利大户与 C 级反向大户的名义资金多头占比演变；50% 虚线为多空平衡线。
             </p>
             <div class="chart-box chart-sm" id="war-div-chart"></div>
           </article>
@@ -505,16 +441,16 @@
         <article class="card">
           <div class="card-head wrap-head">
             <div>
-              <p class="eyebrow">ACTIVE DIRECTIONAL WHALE FLEET (DEDUPLICATED)</p>
-              <h2>顶级在役实盘巨鲸编队榜（点击任一行查多币持仓与轨迹）</h2>
-              <p class="muted small mono" id="war-fleet-freshness" style="margin:3px 0 0;">每 15 分钟链上实盘核验 · 已平仓实体自动剔除</p>
+              <p class="eyebrow">ACTIVE DIRECTIONAL WHALE POSITIONS (DEDUPLICATED)</p>
+              <h2>在役实盘大户持仓榜（点击任一行查完整头寸与轨迹）</h2>
+              <p class="muted small mono" id="war-fleet-freshness" style="margin:3px 0 0;">每 15 分钟链上实盘核验 · 已平仓大户自动剔除</p>
             </div>
             <div class="feed-controls">
               <div class="seg-group seg-sm" id="war-tier-filter">
-                <button class="seg-btn active" data-tier="ALL" type="button">全阵营</button>
+                <button class="seg-btn active" data-tier="ALL" type="button">全部分层</button>
                 <button class="seg-btn" data-tier="SA" type="button">S/A 聪明钱</button>
                 <button class="seg-btn" data-tier="C" type="button">C 反指</button>
-                <button class="seg-btn" data-tier="F" type="button">F 传奇</button>
+                <button class="seg-btn" data-tier="F" type="button">F 明星大户</button>
               </div>
               <div class="seg-group seg-sm" id="war-fleet-coin-filter">
                 <button class="seg-btn active" data-coin="ALL" type="button">全币</button>
@@ -525,22 +461,22 @@
               </div>
               <div class="seg-group seg-sm" id="war-side-filter">
                 <button class="seg-btn active" data-side="ALL" type="button">多/空</button>
-                <button class="seg-btn" data-side="LONG" type="button">多军</button>
-                <button class="seg-btn" data-side="SHORT" type="button">空军</button>
+                <button class="seg-btn" data-side="LONG" type="button">主仓多</button>
+                <button class="seg-btn" data-side="SHORT" type="button">主仓空</button>
               </div>
-              <button class="btn btn-compact" id="btn-war-x-only" type="button" title="仅筛选已关联公开 X (Twitter) 账号的实盘巨鲸">𝕏 有X账号</button>
-              <input class="search-input" id="war-fleet-search" type="search" placeholder="筛选代号 / @X / 地址 / 币种…" />
+              <button class="btn btn-compact" id="btn-war-x-only" type="button" title="仅筛选已关联公开 X (Twitter) 账号的实盘大户">𝕏 有X账号</button>
+              <input class="search-input" id="war-fleet-search" type="search" placeholder="筛选名称 / @X / 地址 / 标的…" />
             </div>
           </div>
           <div class="table-wrap">
             <table class="data-table">
               <thead>
                 <tr>
-                  <th>舰级与去重实体</th>
-                  <th>阵营分层</th>
-                  <th>主攻仓位</th>
+                  <th>体量与去重大户</th>
+                  <th>历史画像</th>
+                  <th>核心头寸</th>
                   <th class="num hide-xs">总名义仓位</th>
-                  <th class="hide-sm">近期动向</th>
+                  <th class="hide-sm">近期调仓</th>
                   <th class="num hide-xs">历史实盘 PnL</th>
                 </tr>
               </thead>
@@ -706,10 +642,13 @@
             <div class="card-head">
               <div>
                 <p class="eyebrow">HYPERLIQUID ECOSYSTEM</p>
-                <h2>Hyperliquid 持仓与援助基金</h2>
+                <h2>Hyperliquid 持仓与回购基金 (AF)</h2>
               </div>
-              <span class="muted small mono">Public API</span>
+              <span class="muted small mono">链上永续 DEX</span>
             </div>
+            <p class="card-note">
+              援助基金（AF）用协议手续费在二级市场自动回购 HYPE，类似上市公司股票回购账户。
+            </p>
             <div class="mini-kpi-grid" id="hl-kpis"></div>
             <div class="table-wrap mt-12">
               <table class="data-table">
@@ -717,7 +656,7 @@
                   <tr>
                     <th>合约</th>
                     <th class="num">标记价</th>
-                    <th class="num">OI</th>
+                    <th class="num">持仓量 OI</th>
                     <th class="num hide-xs">24h 量</th>
                     <th class="num">年化费率</th>
                   </tr>
@@ -745,12 +684,12 @@
                 <tr>
                   <th>合约</th>
                   <th class="num hide-sm">现价</th>
-                  <th class="num">1h OI</th>
+                  <th class="num">1h 持仓变化</th>
                   <th class="num">1h 涨跌</th>
                   <th class="num hide-sm">OI 规模</th>
-                  <th class="num hide-md">24h 量</th>
+                  <th class="num hide-md">24h 成交额</th>
                   <th class="num">8h 费率 (年化)</th>
-                  <th>状态标签</th>
+                  <th>拥挤度状态</th>
                 </tr>
               </thead>
               <tbody id="oi-tbody"></tbody>
@@ -764,19 +703,19 @@
         <article class="card">
           <div class="card-head wrap-head">
             <div>
-              <p class="eyebrow">LIVE EARN · AIRDROP · ANTI-RUG RADAR</p>
-              <h2>精选在期高息理财与撸毛清单</h2>
+              <p class="eyebrow">EXCHANGE YIELD · AIRDROP · COST RISK</p>
+              <h2>交易所高息理财与激励清单</h2>
             </div>
             <div class="seg-group seg-sm" id="promo-cat-filter">
               <button class="seg-btn active" data-cat="ALL" type="button">全部</button>
               <button class="seg-btn" data-cat="HIGH_YIELD" type="button">高息理财</button>
               <button class="seg-btn" data-cat="AIRDROP" type="button">空投·打新</button>
               <button class="seg-btn" data-cat="CAMPAIGN" type="button">常规活动</button>
-              <button class="seg-btn" data-cat="WARN" type="button">慎防反撸</button>
+              <button class="seg-btn" data-cat="WARN" type="button">高磨损预警</button>
             </div>
           </div>
           <p class="card-note">
-            实时聚合 Binance / OKX / Bybit / Bitget 活期高息、Alpha 积分空投、代币化股票理财与打新活动；自动剔除过期项与返佣参数，显式标注刷量反撸陷阱。
+            实时聚合 Binance / OKX / Bybit / Bitget 活期理财、积分空投、代币化股票理财与打新活动；自动剔除过期项与返佣参数，显式标注刷交易量高磨损风险。
           </p>
           <div class="promo-grid" id="promo-grid"></div>
         </article>
@@ -826,7 +765,7 @@
                 <button class="seg-btn" data-cat="CRYPTO" type="button">加密快讯</button>
                 <button class="seg-btn" data-cat="MACRO" type="button">美股·宏观</button>
                 <button class="seg-btn" data-cat="LISTING" type="button">上新·公告</button>
-                <button class="seg-btn" data-cat="EARN" type="button">理财·羊毛</button>
+                <button class="seg-btn" data-cat="EARN" type="button">理财·活动</button>
                 <button class="seg-btn" data-cat="MOVES" type="button">异动·OI</button>
                 <button class="seg-btn" data-cat="INTEL" type="button">深度预警</button>
               </div>
