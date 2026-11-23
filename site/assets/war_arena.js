@@ -160,7 +160,8 @@
       volSlider.value = String(Math.round(war.volume * 100));
     }
     if (btn) {
-      btn.textContent = war.soundOn ? "🔊 战歌激燃中" : "⚔️ 开启战歌";
+      btn.textContent = war.soundOn ? "⏸ 关闭战歌" : "▶ 开启战歌";
+      btn.title = war.soundOn ? "点击立即暂停并关闭背景战歌与空战音效" : "点击开启五国背景战歌与空战音效";
       btn.classList.toggle("active", war.soundOn);
     }
     if (prompt) {
