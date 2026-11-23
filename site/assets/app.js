@@ -956,22 +956,27 @@
         const data = await hlRes.value.json();
         const universe = data?.[0]?.universe || [];
         const ctxs = data?.[1] || [];
-        const idx = universe.findIndex((u) => u.name === "HYPE");
-        if (idx >= 0 && ctxs[idx]) {
-          const mark = Number(ctxs[idx].markPx);
-          const prev = Number(ctxs[idx].prevDayPx);
-          state.liveCrypto.HYPE = {
-            price: mark,
-            chg_pct: prev > 0 ? ((mark / prev) - 1) * 100 : null,
-          };
-          gotLive = true;
-        }
+        ["BTC", "ETH", "BNB", "SOL", "HYPE"].forEach((sym) => {
+          if (state.liveCrypto[sym] && Number.isFinite(state.liveCrypto[sym].price)) return;
+          const idx = universe.findIndex((u) => u.name === sym);
+          if (idx >= 0 && ctxs[idx]) {
+            const mark = Number(ctxs[idx].markPx);
+            const prev = Number(ctxs[idx].prevDayPx);
+            if (Number.isFinite(mark) && mark > 0) {
+              state.liveCrypto[sym] = {
+                price: mark,
+                chg_pct: Number.isFinite(prev) && prev > 0 ? ((mark / prev) - 1) * 100 : null,
+              };
+              gotLive = true;
+            }
+          }
+        });
       }
 
-      // Fallback from exported Hyperliquid snapshot if browser cannot reach exchange APIs
-      if (!gotLive && state.flows?.hyperliquid?.top_markets) {
+      // Fallback any still-missing core coins from exported Hyperliquid snapshot
+      if (state.flows?.hyperliquid?.top_markets) {
         state.flows.hyperliquid.top_markets.forEach((c) => {
-          if (["BTC", "ETH", "SOL", "HYPE"].includes(c.coin) && !state.liveCrypto[c.coin]) {
+          if (["BTC", "ETH", "BNB", "SOL", "HYPE"].includes(c.coin) && !state.liveCrypto[c.coin]) {
             state.liveCrypto[c.coin] = { price: c.mark, chg_pct: null };
           }
         });
