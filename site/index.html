@@ -1,84 +1,109 @@
 <!doctype html>
-<html lang="zh-CN" data-theme="light">
+<html lang="zh-CN" data-theme="dark" data-color-mode="intl">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>DanClub Open Terminal · 开源多市场实时情报终端</title>
+    <title>DanClub Terminal · 多市场开源金融情报终端</title>
     <meta
       name="description"
-      content="100% 免费开源、零隐私泄露的多市场金融情报终端：7项底部共振仪表盘、海力士/黄金跨市场价差、中证股指贴水、BTC/ETH 现货 ETF 资金流、MSTR mNAV、Hyperliquid 生态、币安 OI 杠杆雷达、四所充提防飞刀与免费公开 JSON API。"
+      content="免费开源的多市场金融情报终端：市场态势雷达、7项底部共振仪表盘、海力士/黄金跨市场价差、中证股指贴水期限结构、BTC/ETH 现货 ETF 资金流、MSTR mNAV、Hyperliquid、币安杠杆与极端费率雷达及免鉴权 JSON API。"
     />
-    <meta property="og:title" content="DanClub Open Terminal · 开源多市场实时情报终端" />
+    <meta property="og:title" content="DanClub Terminal · 多市场开源金融情报终端" />
     <meta
       property="og:description"
-      content="免费公开的多市场量化数据看板与无鉴权 JSON API（MIT 开源）。"
+      content="面向跨市场交易者的免费开源量化数据看板与免鉴权只读 JSON API（MIT License）。"
     />
     <meta property="og:type" content="website" />
     <link rel="stylesheet" href="./assets/style.css" />
   </head>
   <body>
-    <!-- Top Live Ribbon -->
-    <div class="ribbon-wrap" aria-label="核心资产实时行情条">
+    <!-- Top Live Market Tape -->
+    <div class="ribbon-wrap" aria-label="核心资产实时行情带">
       <div class="container ribbon-inner">
         <div class="ribbon-scroll" id="live-ribbon">
-          <div class="tick-pill skeleton">正在加载实时锚点…</div>
+          <div class="tick-pill muted">正在同步核心行情…</div>
         </div>
-        <div class="ribbon-status">
+        <div class="ribbon-status" title="浏览器直连公开加密行情 + 服务端定期快照">
           <span class="pulse-dot" id="live-dot"></span>
-          <span id="live-badge">快照同步中</span>
+          <span id="live-badge">连接中</span>
         </div>
       </div>
     </div>
 
-    <!-- Main Header & Navigation -->
+    <!-- Compact Terminal Header & Navigation -->
     <header class="topbar">
       <div class="container topbar-inner">
         <div class="brand">
-          <div class="brand-mark" aria-hidden="true">D</div>
-          <div>
+          <div class="brand-mark" aria-hidden="true">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+              <rect x="2.5" y="2.5" width="19" height="19" rx="4.5" stroke="currentColor" stroke-width="1.8" opacity="0.35" />
+              <path d="M5.5 14.5L9.2 10.5L12.6 13.2L18.5 7.5" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" />
+              <circle cx="18.5" cy="7.5" r="2" fill="currentColor" />
+            </svg>
+          </div>
+          <div class="brand-text">
             <div class="brand-title-row">
-              <h1>DanClub Open Terminal</h1>
-              <span class="badge badge-mit">MIT 开源</span>
-              <span class="badge badge-free">免费 API</span>
+              <h1>DanClub Terminal</h1>
+              <span class="meta-chip mono" id="meta-updated">快照同步中…</span>
             </div>
-            <p class="brand-sub">
-              纯公开市场数据聚合 · 零个人隐私 · 零返佣带单 ·
-              <span id="meta-updated">等待数据更新…</span>
-            </p>
           </div>
         </div>
 
         <div class="topbar-actions">
+          <button
+            class="btn btn-compact"
+            id="btn-color-mode"
+            type="button"
+            title="切换涨跌配色习惯（绿涨红跌 / 红涨绿跌）"
+          >
+            绿涨红跌
+          </button>
+          <button class="btn btn-compact" id="btn-refresh" type="button" title="重新拉取最新快照与行情">
+            刷新
+          </button>
+          <button class="btn btn-compact" id="btn-theme" type="button" aria-label="切换深浅色主题">
+            浅色
+          </button>
           <a
-            class="btn btn-ghost"
+            class="btn btn-compact btn-accent-ghost"
             href="https://github.com/danclub-open/danclub-terminal"
             target="_blank"
             rel="noopener noreferrer"
           >
-            GitHub 源码
+            MIT 源码
           </a>
-          <button class="btn btn-ghost" id="btn-refresh" type="button" title="刷新最新快照">
-            刷新
-          </button>
-          <button class="btn btn-ghost" id="btn-theme" type="button" aria-label="切换深浅色主题">
-            深色模式
-          </button>
         </div>
       </div>
 
-      <nav class="container nav-tabs" aria-label="终端频道导航">
-        <button class="nav-tab active" data-tab="overview" type="button">总览与底部仪表盘</button>
-        <button class="nav-tab" data-tab="arb" type="button">跨市场价差与套利</button>
-        <button class="nav-tab" data-tab="flows" type="button">ETF · 机构与杠杆</button>
-        <button class="nav-tab" data-tab="labs" type="button">模拟实验室与羊毛</button>
-        <button class="nav-tab" data-tab="feed" type="button">高信噪比快讯</button>
-        <button class="nav-tab" data-tab="open" type="button">开源与免费 API</button>
-      </nav>
+      <div class="container nav-shell">
+        <nav class="nav-tabs" aria-label="终端频道导航">
+          <button class="nav-tab active" data-tab="overview" type="button">总览</button>
+          <button class="nav-tab" data-tab="war" type="button">多空战情室 · 巨鲸</button>
+          <button class="nav-tab" data-tab="arb" type="button">跨市场套利</button>
+          <button class="nav-tab" data-tab="flows" type="button">资金流与杠杆</button>
+          <button class="nav-tab" data-tab="labs" type="button">模拟盘与活动</button>
+          <button class="nav-tab" data-tab="feed" type="button">市场快讯</button>
+          <button class="nav-tab" data-tab="open" type="button">开放 API</button>
+        </nav>
+      </div>
     </header>
 
     <main class="container main-shell">
       <!-- TAB 1: OVERVIEW -->
       <section class="tab-panel active" id="tab-overview">
+        <!-- 5-Second Trader Decision Layer: Market Regime + High-Priority Desk Radar -->
+        <article class="card regime-card" id="regime-card">
+          <div class="regime-top">
+            <div class="regime-left">
+              <span class="regime-badge" id="regime-badge">态势计算中</span>
+              <p class="regime-hint" id="regime-hint">正在汇总跨市场情绪、波动率与流动性指标…</p>
+            </div>
+            <div class="regime-chips" id="regime-chips"></div>
+          </div>
+          <div class="signal-grid" id="desk-signals"></div>
+        </article>
+
+        <!-- 4 Core KPI Tiles -->
         <div class="kpi-grid-4" id="overview-kpis">
           <article class="card kpi-card"><div class="skeleton-block"></div></article>
           <article class="card kpi-card"><div class="skeleton-block"></div></article>
@@ -86,17 +111,18 @@
           <article class="card kpi-card"><div class="skeleton-block"></div></article>
         </div>
 
+        <!-- Balanced 2-Column Core Workbench -->
         <div class="grid-2-wide">
           <article class="card">
             <div class="card-head">
               <div>
-                <p class="eyebrow">BOTTOM CONFIRMATION DASHBOARD</p>
-                <h2>7 项底部共振观察仪表盘</h2>
+                <p class="eyebrow">BOTTOM CONFIRMATION MATRIX</p>
+                <h2>7 项底部共振观察矩阵</h2>
               </div>
               <span class="pill" id="bottom-score-pill">-- / 7</span>
             </div>
             <p class="card-note">
-              客观追踪 7 项结构性见底条件，≥5 项转绿提示周期共振信号，不构成抄底指令。
+              追踪 7 项周期结构性条件，≥5 项转绿提示周期共振观察区；稳定币项为 USDT + USDC 双龙头口径，与顶部 DeFiLlama 全口径互补。
             </p>
             <div class="bottom-list" id="bottom-list"></div>
           </article>
@@ -105,10 +131,10 @@
             <article class="card">
               <div class="card-head">
                 <div>
-                  <p class="eyebrow">DAILY OBJECTIVE BRIEF</p>
-                  <h2>最新客观短线研判</h2>
+                  <p class="eyebrow">DESK BRIEF</p>
+                  <h2>客观短线研判</h2>
                 </div>
-                <span class="muted small" id="brief-time">--</span>
+                <span class="pill pill-muted mono" id="brief-time">--</span>
               </div>
               <div id="brief-box" class="brief-box">加载中…</div>
             </article>
@@ -117,43 +143,65 @@
               <div class="card-head">
                 <div>
                   <p class="eyebrow">BTC MINER ECONOMICS</p>
-                  <h2>全网算力与主流矿机关机价</h2>
+                  <h2>全网算力与矿机关机价</h2>
                 </div>
-                <span class="muted small" id="miner-elec">电费 $0.06/kWh</span>
+                <span class="muted small mono" id="miner-elec">$0.06/kWh</span>
               </div>
               <div id="miner-box" class="miner-box">加载中…</div>
+            </article>
+
+            <article class="card">
+              <div class="card-head">
+                <div>
+                  <p class="eyebrow">US 10Y TREASURY YIELD</p>
+                  <h2>美债 10Y 收益率走势（近 14 日）</h2>
+                </div>
+                <span class="mono small muted" id="us10y-latest">--</span>
+              </div>
+              <div class="chart-box chart-xs" id="us10y-chart-box"></div>
             </article>
           </div>
         </div>
 
+        <!-- Balanced Bottom 2-Column: Macro Matrix + QDII Premium -->
         <div class="grid-2">
-          <article class="card">
-            <div class="card-head">
+          <article class="card" id="macro-card">
+            <div class="card-head wrap-head">
               <div>
-                <p class="eyebrow">CROSS-MARKET MACRO</p>
-                <h2>跨市场宏观与核心映射</h2>
+                <p class="eyebrow">CROSS-MARKET MACRO &amp; 52W DRAWDOWN</p>
+                <h2>跨市场宏观映射</h2>
               </div>
-              <span class="muted small">美股 · 算力存储 · 币股 · 利率外汇</span>
+              <div class="seg-group seg-sm" id="macro-group-filter">
+                <button class="seg-btn active" data-group="ALL" type="button">全部</button>
+                <button class="seg-btn" data-group="EQUITY" type="button">美股·币股</button>
+                <button class="seg-btn" data-group="FX" type="button">利率·汇金</button>
+              </div>
             </div>
+            <p class="card-note" id="macro-session-note">
+              常规盘价格与涨跌幅严格对应同一交易时段；美股休市期间标注「休市·昨收」及盘前/盘后参考。
+            </p>
             <div class="macro-grid" id="macro-grid"></div>
           </article>
 
-          <article class="card">
+          <article class="card" id="qdii-card">
             <div class="card-head">
               <div>
-                <p class="eyebrow">A-SHARE QDII PREMIUM</p>
-                <h2>场内美股 QDII 溢价风险监控</h2>
+                <p class="eyebrow">A-SHARE QDII PREMIUM RISK</p>
+                <h2>场内美股 QDII 溢价风险榜</h2>
               </div>
-              <span class="muted small">溢价 ≥15% 重点防追高</span>
+              <span class="muted small mono" id="qdii-updated">溢价 ≥15% 警惕</span>
             </div>
+            <p class="card-note">
+              按场内市价相对估算净值（IOPV）溢价率降序排列，高溢价阶段存在标的下跌与溢价收敛双杀风险。
+            </p>
             <div class="table-wrap">
               <table class="data-table">
                 <thead>
                   <tr>
                     <th>代码 / 名称</th>
                     <th class="num">现价</th>
-                    <th class="num">估值 IOPV</th>
-                    <th class="num">涨跌</th>
+                    <th class="num hide-xs">IOPV</th>
+                    <th class="num">日涨跌</th>
                     <th class="num">溢价率</th>
                   </tr>
                 </thead>
@@ -164,18 +212,153 @@
         </div>
       </section>
 
-      <!-- TAB 2: ARBITRAGE & SPREADS -->
-      <section class="tab-panel" id="tab-arb">
+      <!-- TAB 2: TACTICAL AIR-BATTLE WAR ROOM & WHALE RADAR -->
+      <section class="tab-panel" id="tab-war">
+        <article class="card war-arena-card" id="war-arena-card">
+          <div class="card-head wrap-head">
+            <div>
+              <p class="eyebrow">LIVE AIR-COMBAT RADAR · REAL WHALE FLAGSHIPS</p>
+              <h2>多空空战战情室（绿军多头 vs 红军空头）</h2>
+            </div>
+            <div class="war-toolbar">
+              <div class="seg-group seg-sm" id="war-coin-tabs">
+                <button class="seg-btn active" data-coin="BTC" type="button">BTC</button>
+                <button class="seg-btn" data-coin="ETH" type="button">ETH</button>
+                <button class="seg-btn" data-coin="SOL" type="button">SOL</button>
+                <button class="seg-btn" data-coin="HYPE" type="button">HYPE</button>
+              </div>
+              <button class="btn btn-compact" id="btn-war-sound" type="button">音效 关</button>
+              <button class="btn btn-compact" id="btn-war-poster" type="button">导出战报图</button>
+              <button class="btn btn-compact btn-accent-ghost" id="btn-war-fullscreen" type="button">副屏全屏</button>
+            </div>
+          </div>
+
+          <!-- Battle Power Bar -->
+          <div class="war-power-head">
+            <div class="war-side-lbl ok mono">多军战力 <b id="war-pct-long">50.0%</b></div>
+            <span class="pill pill-warn" id="war-verdict">两军拉锯</span>
+            <div class="war-side-lbl risk mono"><b id="war-pct-short">50.0%</b> 空军战力</div>
+          </div>
+          <div class="war-power-track">
+            <div class="war-bar-long" id="war-power-long" style="width:50%;"></div>
+            <div class="war-bar-short" id="war-power-short" style="width:50%;"></div>
+          </div>
+          <div class="war-power-meta">
+            <span class="mono small muted" id="war-power-sub">等待实况成交流接入…</span>
+            <span class="mono small muted" id="war-ws-status">连接中…</span>
+          </div>
+
+          <!-- 60fps HiDPI Tactical Air-Combat Canvas -->
+          <div class="war-canvas-wrap">
+            <canvas id="war-canvas"></canvas>
+            <div class="chart-tooltip" id="war-canvas-tip"></div>
+          </div>
+
+          <div class="war-legend-row">
+            <span><b class="ok">光束</b> &lt;$5万</span>
+            <span><b class="ok">轻型战机</b> ≥$5万</span>
+            <span><b class="ok">重型截击机</b> ≥$25万</span>
+            <span><b class="warn">隐形轰炸机</b> ≥$100万</span>
+            <span><b class="warn">金环 [S]</b> S/A级聪明钱母舰</span>
+            <span><b style="color:#a855f7;">紫环 [C]</b> C级反指巨鲸母舰（点击母舰查持仓）</span>
+          </div>
+        </article>
+
+        <!-- Smart Money vs Counter Whale Confrontation & Divergence Curve -->
+        <div class="grid-2-wide">
+          <article class="card">
+            <div class="card-head wrap-head">
+              <div>
+                <p class="eyebrow">SMART MONEY VS COUNTER-WHALE CONFRONTATION</p>
+                <h2>实体去重阵营对峙仪（聪明钱 vs 反指巨鲸）</h2>
+              </div>
+              <div class="seg-group seg-sm" id="war-cohort-tabs">
+                <button class="seg-btn" data-coin="ALL" type="button">全品种</button>
+                <button class="seg-btn active" data-coin="BTC" type="button">BTC</button>
+                <button class="seg-btn" data-coin="ETH" type="button">ETH</button>
+                <button class="seg-btn" data-coin="HYPE" type="button">HYPE</button>
+                <button class="seg-btn" data-coin="SOL" type="button">SOL</button>
+              </div>
+            </div>
+            <div class="war-stats-bar" id="war-stats-bar"></div>
+            <div class="war-div-banner" id="war-div-banner"></div>
+            <div class="war-factions-grid" id="war-factions-grid"></div>
+          </article>
+
+          <article class="card">
+            <div class="card-head">
+              <div>
+                <p class="eyebrow">SMART-COUNTER DIVERGENCE TRAJECTORY</p>
+                <h2>阵营多头占比背离曲线</h2>
+              </div>
+              <span class="muted small">15m 实体去重快照</span>
+            </div>
+            <p class="card-note">
+              对比 S/A 级聪明钱与 C 级反指巨鲸的资金多头占比演进；50% 虚线为多空平衡线。
+            </p>
+            <div class="chart-box chart-sm" id="war-div-chart"></div>
+          </article>
+        </div>
+
+        <!-- Entity-Deduplicated Flagship Fleet Table -->
         <article class="card">
           <div class="card-head wrap-head">
             <div>
+              <p class="eyebrow">ACTIVE DIRECTIONAL WHALE FLEET (DEDUPLICATED)</p>
+              <h2>顶级在役实盘巨鲸编队榜（点击任一行查多币持仓与轨迹）</h2>
+            </div>
+            <div class="feed-controls">
+              <div class="seg-group seg-sm" id="war-tier-filter">
+                <button class="seg-btn active" data-tier="ALL" type="button">全阵营</button>
+                <button class="seg-btn" data-tier="SA" type="button">S/A 聪明钱</button>
+                <button class="seg-btn" data-tier="C" type="button">C 反指</button>
+                <button class="seg-btn" data-tier="F" type="button">F 传奇</button>
+              </div>
+              <div class="seg-group seg-sm" id="war-fleet-coin-filter">
+                <button class="seg-btn active" data-coin="ALL" type="button">全币</button>
+                <button class="seg-btn" data-coin="BTC" type="button">BTC</button>
+                <button class="seg-btn" data-coin="ETH" type="button">ETH</button>
+                <button class="seg-btn" data-coin="HYPE" type="button">HYPE</button>
+                <button class="seg-btn" data-coin="TRADFI" type="button">美股大宗</button>
+              </div>
+              <div class="seg-group seg-sm" id="war-side-filter">
+                <button class="seg-btn active" data-side="ALL" type="button">多/空</button>
+                <button class="seg-btn" data-side="LONG" type="button">多军</button>
+                <button class="seg-btn" data-side="SHORT" type="button">空军</button>
+              </div>
+              <input class="search-input" id="war-fleet-search" type="search" placeholder="筛选代号 / 地址 / 币种…" />
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>舰级与去重实体</th>
+                  <th>阵营分层</th>
+                  <th>主攻仓位</th>
+                  <th class="num">总名义仓位</th>
+                  <th class="hide-sm">近期动向</th>
+                  <th class="num hide-xs">历史实盘 PnL</th>
+                </tr>
+              </thead>
+              <tbody id="war-fleet-tbody"></tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+
+      <!-- TAB 3: ARBITRAGE & SPREADS -->
+      <section class="tab-panel" id="tab-arb">
+        <article class="card" id="spread-card">
+          <div class="card-head wrap-head">
+            <div>
               <p class="eyebrow">CROSS-MARKET SPREAD MONITOR</p>
-              <h2>跨市场价差监控（动态自适应纵轴 · 告别零轴压扁）</h2>
+              <h2>跨市场价差与 72h 偏离监控</h2>
             </div>
             <div class="seg-group" id="spread-pair-tabs">
-              <button class="seg-btn active" data-pair="SKHY_VS_SKHYNIX" type="button">海力士 ADR×10 vs 韩股</button>
-              <button class="seg-btn" data-pair="XAU_VS_XAUT" type="button">黄金 XAU vs XAUT</button>
-              <button class="seg-btn" data-pair="XAU_VS_PAXG" type="button">黄金 XAU vs PAXG</button>
+              <button class="seg-btn active" data-pair="SKHY_VS_SKHYNIX" type="button">海力士 ADR×10 / 韩股</button>
+              <button class="seg-btn" data-pair="XAU_VS_XAUT" type="button">黄金 XAU / XAUT</button>
+              <button class="seg-btn" data-pair="XAU_VS_PAXG" type="button">黄金 XAU / PAXG</button>
             </div>
           </div>
 
@@ -185,40 +368,43 @@
             <span class="muted small" id="spread-chart-meta">加载中…</span>
             <div class="seg-group seg-sm" id="spread-range-tabs">
               <button class="seg-btn active" data-range="24h" type="button">近 24 小时</button>
-              <button class="seg-btn" data-range="14d" type="button">近 14 天日度带</button>
+              <button class="seg-btn" data-range="14d" type="button">近 14 天区间带</button>
             </div>
           </div>
           <div class="chart-box" id="spread-chart-box"></div>
-          <p class="card-note">
-            说明：价差曲线采用动态区间纵轴并标注 72 小时均值带；跨市场溢价包含汇率、交割机制与流动性成本，不等于无风险收益。
+          <p class="card-note mt-10">
+            注：结构性跨市场价差包含汇率、交割机制、资金费率与流动性成本，Z-Score 仅衡量相对近 72 小时常态带的偏离程度。
           </p>
         </article>
 
         <div class="grid-2-wide">
-          <article class="card">
+          <article class="card" id="csi-card">
             <div class="card-head wrap-head">
               <div>
                 <p class="eyebrow">CFFEX INDEX FUTURES BASIS</p>
-                <h2>中证股指期货贴水期限结构（含 2706 远月）</h2>
+                <h2>中证股指期货贴水期限结构</h2>
               </div>
               <div class="seg-group seg-sm" id="csi-filter">
                 <button class="seg-btn active" data-code="ALL" type="button">全部</button>
-                <button class="seg-btn" data-code="IC" type="button">IC 中证500</button>
-                <button class="seg-btn" data-code="IM" type="button">IM 中证1000</button>
-                <button class="seg-btn" data-code="IF" type="button">IF 沪深300</button>
-                <button class="seg-btn" data-code="IH" type="button">IH 上证50</button>
+                <button class="seg-btn" data-code="IC" type="button">IC</button>
+                <button class="seg-btn" data-code="IM" type="button">IM</button>
+                <button class="seg-btn" data-code="IF" type="button">IF</button>
+                <button class="seg-btn" data-code="IH" type="button">IH</button>
               </div>
             </div>
+            <p class="card-note" id="csi-meta">
+              贴水为负值表示期货低于现货；远月 2706 深度年化贴水常作为多头替代/吃贴水安全垫参考（蓝青色标示贴水厚度）。
+            </p>
             <div class="table-wrap">
               <table class="data-table">
                 <thead>
                   <tr>
                     <th>合约</th>
-                    <th>到期日</th>
-                    <th class="num">剩余天数</th>
-                    <th class="num">现货</th>
+                    <th class="hide-sm">到期日</th>
+                    <th class="num">剩余</th>
+                    <th class="num hide-sm">现货</th>
                     <th class="num">期货</th>
-                    <th class="num">贴水点数</th>
+                    <th class="num hide-xs">贴水点</th>
                     <th class="num">贴水%</th>
                     <th class="num">年化贴水</th>
                   </tr>
@@ -228,40 +414,53 @@
             </div>
           </article>
 
-          <article class="card">
-            <div class="card-head">
-              <div>
-                <p class="eyebrow">EXCHANGE WALLET SAFETY RADAR</p>
-                <h2>四所充提安全状态（防停充提飞刀）</h2>
+          <div class="stack-col">
+            <article class="card">
+              <div class="card-head">
+                <div>
+                  <p class="eyebrow">BASIS TERM CURVE</p>
+                  <h2>四大指数年化贴水期限曲线</h2>
+                </div>
+                <span class="muted small">近月 → 2706 远月</span>
               </div>
-              <span class="muted small">Binance · OKX · Bitget · Gate</span>
-            </div>
-            <div class="wallet-sum-grid" id="wallet-summary"></div>
-            <h3 class="subhead">主流币充提异常明细</h3>
-            <div class="table-wrap">
-              <table class="data-table">
-                <thead>
-                  <tr>
-                    <th>币种</th>
-                    <th>交易所</th>
-                    <th>充值</th>
-                    <th>提现</th>
-                  </tr>
-                </thead>
-                <tbody id="wallet-halts-tbody"></tbody>
-              </table>
-            </div>
-          </article>
+              <div class="chart-box chart-sm" id="csi-curve-box"></div>
+            </article>
+
+            <article class="card" id="wallet-card">
+              <div class="card-head">
+                <div>
+                  <p class="eyebrow">EXCHANGE WALLET SAFETY</p>
+                  <h2>四所充提安全雷达</h2>
+                </div>
+                <span class="muted small mono" id="wallet-updated">Binance · OKX · Bitget · Gate</span>
+              </div>
+              <div class="wallet-sum-grid" id="wallet-summary"></div>
+              <h3 class="subhead">主流币充提受限明细</h3>
+              <div class="table-wrap">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>币种</th>
+                      <th>交易所</th>
+                      <th>充值</th>
+                      <th>提现</th>
+                    </tr>
+                  </thead>
+                  <tbody id="wallet-halts-tbody"></tbody>
+                </table>
+              </div>
+            </article>
+          </div>
         </div>
       </section>
 
       <!-- TAB 3: FLOWS, MSTR, HYPERLIQUID & OI -->
       <section class="tab-panel" id="tab-flows">
-        <article class="card">
+        <article class="card" id="etf-card">
           <div class="card-head wrap-head">
             <div>
               <p class="eyebrow">US SPOT ETF DAILY FLOWS (FARSIDE)</p>
-              <h2>美国现货 ETF 近 15 交易日资金流矩阵</h2>
+              <h2 id="etf-heading">美国现货 ETF 资金流矩阵</h2>
             </div>
             <div class="seg-group" id="etf-asset-tabs">
               <button class="seg-btn active" data-asset="BTC" type="button">BTC 现货 ETF</button>
@@ -285,25 +484,28 @@
         </article>
 
         <div class="grid-2">
-          <article class="card">
+          <article class="card" id="mstr-card">
             <div class="card-head">
               <div>
                 <p class="eyebrow">STRATEGY (MSTR) · SEC 8-K &amp; MNAV</p>
-                <h2>微策略持仓与 mNAV 溢价监控</h2>
+                <h2>Strategy 持仓与 mNAV 估值</h2>
               </div>
               <span class="pill" id="mstr-mnav-pill">mNAV --</span>
             </div>
             <div class="mini-kpi-grid" id="mstr-kpis"></div>
             <div class="chart-box chart-sm" id="mstr-chart-box"></div>
+            <p class="card-note mt-10">
+              注：美股休市期间 mNAV 保持最近交易收盘倍数；1.0x 虚线代表股价折合净资产平价线。
+            </p>
           </article>
 
-          <article class="card">
+          <article class="card" id="hl-card">
             <div class="card-head">
               <div>
                 <p class="eyebrow">HYPERLIQUID ECOSYSTEM</p>
-                <h2>Hyperliquid 持仓、回购与主流费率</h2>
+                <h2>Hyperliquid 持仓与援助基金</h2>
               </div>
-              <span class="muted small">Public API</span>
+              <span class="muted small mono">Public API</span>
             </div>
             <div class="mini-kpi-grid" id="hl-kpis"></div>
             <div class="table-wrap mt-12">
@@ -312,8 +514,8 @@
                   <tr>
                     <th>合约</th>
                     <th class="num">标记价</th>
-                    <th class="num">OI (USD)</th>
-                    <th class="num">24h 量</th>
+                    <th class="num">OI</th>
+                    <th class="num hide-xs">24h 量</th>
                     <th class="num">年化费率</th>
                   </tr>
                 </thead>
@@ -323,29 +525,29 @@
           </article>
         </div>
 
-        <article class="card">
-          <div class="card-head">
+        <article class="card" id="oi-card">
+          <div class="card-head wrap-head">
             <div>
-              <p class="eyebrow">BINANCE USD-M 1H OI QTY RADAR</p>
-              <h2>币安 U 本位 1h 杠杆急增雷达（附实盘回测避坑标签）</h2>
+              <p class="eyebrow">BINANCE USD-M OI &amp; EXTREME FUNDING RADAR</p>
+              <h2>币安 U 本位杠杆异动与极端费率雷达</h2>
             </div>
-            <span class="muted small">严格按合约币数口径，剔除价格虚胖</span>
+            <span class="muted small">异常信号置顶 · 严格按合约币数口径</span>
           </div>
           <p class="card-note">
-            历史回测表明：「OI 急增 + 价格上涨」往往对应短期多头拥挤、易冲高回落洗多；「OI 急增 + 价格下跌」则需留意空头扎堆与逼空反转。
+            同时监测 1h 持仓量（OI Qty）急增与 8h 极端资金费率（≤-0.10% 或 ≥+0.08%）：极端负费率叠加现货停充提常伴随剧烈轧空，追多拥挤则警惕冲高回落洗多。
           </p>
           <div class="table-wrap">
             <table class="data-table">
               <thead>
                 <tr>
                   <th>合约</th>
-                  <th class="num">现价</th>
-                  <th class="num">1h OI 增幅</th>
+                  <th class="num hide-sm">现价</th>
+                  <th class="num">1h OI</th>
                   <th class="num">1h 涨跌</th>
-                  <th class="num">OI 规模</th>
-                  <th class="num">24h 成交额</th>
-                  <th class="num">8h 费率</th>
-                  <th>回测风控标签</th>
+                  <th class="num hide-sm">OI 规模</th>
+                  <th class="num hide-md">24h 量</th>
+                  <th class="num">8h 费率 (年化)</th>
+                  <th>状态标签</th>
                 </tr>
               </thead>
               <tbody id="oi-tbody"></tbody>
@@ -357,12 +559,12 @@
       <!-- TAB 4: LABS & PROMOS -->
       <section class="tab-panel" id="tab-labs">
         <article class="card">
-          <div class="card-head">
+          <div class="card-head wrap-head">
             <div>
-              <p class="eyebrow">OPEN QUANT EXPERIMENT · PAPER TRADING</p>
-              <h2>三套公开模拟定投策略长期净值对照</h2>
+              <p class="eyebrow">OPEN QUANT PAPER EXPERIMENT</p>
+              <h2>三套公开模拟定投策略净值对照</h2>
             </div>
-            <span class="pill" id="dca-days-pill">纯虚拟模拟盘</span>
+            <span class="pill pill-muted mono" id="dca-days-pill">纯虚拟模拟盘</span>
           </div>
           <p class="card-note" id="dca-disclaimer"></p>
           <div class="dca-strat-grid" id="dca-strategies"></div>
@@ -371,11 +573,11 @@
           <div class="table-wrap">
             <table class="data-table">
               <thead>
-                <tr>
+                <tr id="dca-asset-thead">
                   <th>标的</th>
                   <th class="num">固定定投 (FIXED)</th>
                   <th class="num">价值平均 (VA)</th>
-                  <th class="num">200日均线+恐慌 (MA200_FNG)</th>
+                  <th class="num">200日均线+恐慌 (MAFG)</th>
                 </tr>
               </thead>
               <tbody id="dca-asset-tbody"></tbody>
@@ -384,29 +586,29 @@
         </article>
 
         <article class="card">
-          <div class="card-head">
+          <div class="card-head wrap-head">
             <div>
-              <p class="eyebrow">VERIFIED PUBLIC EXCHANGE PROMOS</p>
-              <h2>稳健活动与防反撸公开清单（零返佣链接）</h2>
+              <p class="eyebrow">CURATED PUBLIC EXCHANGE PROMOS</p>
+              <h2>精选在期交易所活动与防反撸清单</h2>
             </div>
-            <span class="muted small">已自动剥离推广/邀请参数</span>
+            <span class="muted small">自动剔除过期项 · 剥离返佣邀请参数</span>
           </div>
           <div class="promo-grid" id="promo-grid"></div>
         </article>
       </section>
 
-      <!-- TAB 5: HIGH-SIGNAL FEED -->
+      <!-- TAB 5: HIGH-SIGNAL WIRE -->
       <section class="tab-panel" id="tab-feed">
         <article class="card">
           <div class="card-head wrap-head">
             <div>
-              <p class="eyebrow">SANITIZED HIGH-SIGNAL WIRE</p>
-              <h2>脱敏高信噪比公开快讯与交易所公告</h2>
+              <p class="eyebrow">CURATED MARKET WIRE</p>
+              <h2>高信噪比公开快讯与交易所公告</h2>
             </div>
             <div class="feed-controls">
               <div class="seg-group seg-sm" id="feed-cat-filter">
                 <button class="seg-btn active" data-cat="ALL" type="button">全部</button>
-                <button class="seg-btn" data-cat="秒级快讯" type="button">官方快讯</button>
+                <button class="seg-btn" data-cat="秒级快讯" type="button">市场快讯</button>
                 <button class="seg-btn" data-cat="交易所公告" type="button">交易所公告</button>
                 <button class="seg-btn" data-cat="情报预警" type="button">情报预警</button>
               </div>
@@ -414,7 +616,7 @@
                 class="search-input"
                 id="feed-search"
                 type="search"
-                placeholder="筛选关键词（如 BTC、SEC、ETF…）"
+                placeholder="搜索关键词（BTC、SEC、NVDA…）"
               />
             </div>
           </div>
@@ -428,20 +630,20 @@
           <article class="card">
             <div class="card-head">
               <div>
-                <p class="eyebrow">OPEN SOURCE MANIFESTO</p>
-                <h2>为什么 100% 无偿开源公开？</h2>
+                <p class="eyebrow">OPEN SOURCE ARCHITECTURE</p>
+                <h2>完全开源 · 三层物理隔离设计</h2>
               </div>
-              <span class="badge badge-mit">MIT License</span>
+              <span class="pill pill-ok">MIT License</span>
             </div>
             <div class="prose">
               <p>
-                <strong>DanClub Open Terminal</strong> 是一个完全非盈利、无付费墙、无返佣引流的个人开源金融数据项目。除了作者个人隐私外，全部前端代码、数据导出模板、隐私防火墙脚本与聚合后的公开市场 JSON 接口均无偿开放给社区使用与二次开发。
+                <strong>DanClub Terminal</strong> 是非盈利、无付费墙、无返佣引流的个人开源金融数据项目。全部前端界面、只读白名单导出器、Fail-Closed 隐私防火墙与聚合后的公开 JSON 接口均无偿开放给社区使用与二次开发。
               </p>
-              <h3>零隐私泄露：三层物理隔离架构</h3>
+              <h3>零隐私泄露防线</h3>
               <ol>
-                <li><strong>只读白名单采集层</strong>：导出脚本以 SQLite <code>mode=ro</code> 只读模式仅读取公开行情/公告/统计表，物理不触碰任何私聊、账户或密钥文件。</li>
-                <li><strong>本地 Fail-Closed 隐私防火墙</strong>：发布前递归扫描每一个 JSON 字段，一旦命中邮箱、手机号、私钥/Token 模式、内网地址或私密词立即熔断阻断发布。</li>
-                <li><strong>单向静态 CDN 分发</strong>：公网访客与 API 调用方仅访问静态托管边缘节点，永远无法反连数据采集宿主机。</li>
+                <li><strong>只读白名单采集</strong>：导出脚本以 SQLite <code>mode=ro</code> 只读模式仅读取公开市场表，物理不触碰私聊、个人账户或密钥文件。</li>
+                <li><strong>Fail-Closed 隐私防火墙</strong>：发布前递归扫描每一个键名与字段，命中邮箱、手机号、私钥/Token、内网地址或私有黑名单即熔断中止发布。</li>
+                <li><strong>单向静态分发</strong>：公网与 API 调用方仅访问只读静态边缘节点，源数据节点永不直接暴露。</li>
               </ol>
               <p class="mt-12">
                 <a
@@ -459,34 +661,53 @@
           <article class="card">
             <div class="card-head">
               <div>
-                <p class="eyebrow">FREE PUBLIC READ-ONLY JSON API</p>
-                <h2>免鉴权开放接口（可直接接入 Bot / Excel / 脚本）</h2>
+                <p class="eyebrow">PUBLIC READ-ONLY JSON API</p>
+                <h2>免鉴权开放只读接口</h2>
               </div>
-              <span class="badge badge-free">CORS *</span>
+              <span class="pill pill-info">CORS *</span>
             </div>
             <p class="card-note">
-              全部接口为静态 CDN 托管的只读 JSON，每 15 分钟自动更新，无需 API Key，不限个人合理调用。
+              全部接口为静态托管只读 JSON，无需 API Key，可直接接入量化脚本、Bot、Excel 或 Notion。
             </p>
             <div class="api-list" id="api-list"></div>
-            <pre class="code-box" id="api-preview">点击上方任一接口的「在线试调」，实时查看返回 JSON 结构…</pre>
+            <pre class="code-box" id="api-preview">点击上方任一接口的「试调」，查看实时 JSON 返回结构…</pre>
           </article>
         </div>
       </section>
     </main>
 
+    <!-- Entity Dossier Slide-Over Drawer -->
+    <div class="drawer-backdrop" id="whale-drawer-backdrop"></div>
+    <aside class="whale-drawer" id="whale-drawer" aria-label="巨鲸单舰档案">
+      <div class="wd-head">
+        <div>
+          <p class="eyebrow">WHALE ENTITY DOSSIER</p>
+          <h3 id="wd-title">--</h3>
+          <p class="muted small mono" id="wd-sub">--</p>
+        </div>
+        <button class="btn btn-compact" id="wd-close" type="button">关闭</button>
+      </div>
+      <div class="mini-kpi-grid" id="wd-kpis"></div>
+      <h4 class="subhead">全仓多币种分布</h4>
+      <div class="wd-pos-list" id="wd-positions"></div>
+      <h4 class="subhead">近期全仓净敞口轨迹</h4>
+      <div class="chart-box chart-sm" id="wd-chart"></div>
+    </aside>
+
     <footer class="footer">
       <div class="container footer-inner">
         <div>
-          <strong>免责声明：</strong>本站所有内容均为公开市场数据聚合与开源量化研究工具，不构成任何投资、法律或税务建议；不提供付费喊单、代客理财或推广返佣。市场有风险，决策请独立判断。
+          <strong>免责声明：</strong>本站为公开市场数据聚合与开源量化研究工具，零返佣引流、零私密数据、不构成任何投资或交易建议。市场有风险，决策请独立判断。
         </div>
         <div class="footer-links">
-          <a href="https://github.com/danclub-open/danclub-terminal" target="_blank" rel="noopener noreferrer">MIT 开源源码</a>
+          <a href="https://github.com/danclub-open/danclub-terminal" target="_blank" rel="noopener noreferrer">MIT 源码</a>
           <span>·</span>
-          <a href="#open" id="footer-api-link">免费 JSON API</a>
+          <a href="#open" id="footer-api-link">开放 JSON API</a>
         </div>
       </div>
     </footer>
 
+    <script src="./assets/war_arena.js"></script>
     <script src="./assets/app.js"></script>
   </body>
 </html>
