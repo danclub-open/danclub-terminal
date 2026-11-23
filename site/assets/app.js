@@ -56,10 +56,20 @@
     return trimmed.startsWith("https://") ? trimmed : "";
   };
 
+  const strictNum = (v) => {
+    if (typeof v === "number") return Number.isFinite(v) ? v : null;
+    if (typeof v === "string") {
+      const s = v.trim();
+      if (!s || !/^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test(s)) return null;
+      const n = Number(s);
+      return Number.isFinite(n) ? n : null;
+    }
+    return null;
+  };
+
   const fmtNum = (v, d = 2) => {
-    if (v === null || v === undefined || v === "" || typeof v === "boolean") return "--";
-    const n = Number(v);
-    if (!Number.isFinite(n)) return "--";
+    const n = strictNum(v);
+    if (n === null) return "--";
     return new Intl.NumberFormat("en-US", {
       minimumFractionDigits: d,
       maximumFractionDigits: d,
@@ -69,9 +79,8 @@
   const fmtInt = (v) => fmtNum(v, 0);
 
   const fmtCompact = (v) => {
-    if (v === null || v === undefined || v === "" || typeof v === "boolean") return "--";
-    const n = Number(v);
-    if (!Number.isFinite(n)) return "--";
+    const n = strictNum(v);
+    if (n === null) return "--";
     const abs = Math.abs(n);
     const sign = n < 0 ? "-" : "";
     if (abs >= 1e9) return `${sign}$${fmtNum(abs / 1e9, 2)}B`;
@@ -81,34 +90,49 @@
   };
 
   const fmtSignedPct = (v, d = 2) => {
-    if (v === null || v === undefined || v === "" || typeof v === "boolean") return "--";
-    const n = Number(v);
-    if (!Number.isFinite(n)) return "--";
+    const n = strictNum(v);
+    if (n === null) return "--";
     return `${n > 0 ? "+" : ""}${fmtNum(n, d)}%`;
   };
 
   const fmtSignedNum = (v, d = 1, suffix = "") => {
-    if (v === null || v === undefined || v === "" || typeof v === "boolean") return "--";
-    const n = Number(v);
-    if (!Number.isFinite(n)) return "--";
+    const n = strictNum(v);
+    if (n === null) return "--";
     return `${n > 0 ? "+" : ""}${fmtNum(n, d)}${suffix}`;
   };
 
+  const fmtSignedMusd = (v, d = 1) => {
+    const n = strictNum(v);
+    if (n === null) return "--";
+    const sign = n > 0 ? "+" : n < 0 ? "-" : "";
+    return `${sign}$${fmtNum(Math.abs(n), d)}M`;
+  };
+
   const dirCls = (v) => {
-    if (v === null || v === undefined || v === "" || typeof v === "boolean") return "";
-    const n = Number(v);
-    if (!Number.isFinite(n) || n === 0) return "";
+    const n = strictNum(v);
+    if (n === null || n === 0) return "";
     return n > 0 ? "up" : "down";
   };
 
   const fmtTimeShort = (ts) => {
-    const n = Number(ts);
-    if (!Number.isFinite(n) || n <= 0) return "--";
+    const n = strictNum(ts);
+    if (n === null || n <= 0) return "--";
     const d = new Date(n * 1000);
     const mm = String(d.getMonth() + 1).padStart(2, "0");
     const dd = String(d.getDate()).padStart(2, "0");
     const hh = String(d.getHours()).padStart(2, "0");
     const mi = String(d.getMinutes()).padStart(2, "0");
+    return `${mm}-${dd} ${hh}:${mi}`;
+  };
+
+  const fmtTimeShortBjt = (ts) => {
+    const n = strictNum(ts);
+    if (n === null || n <= 0) return "--";
+    const d = new Date((n + 8 * 3600) * 1000);
+    const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+    const dd = String(d.getUTCDate()).padStart(2, "0");
+    const hh = String(d.getUTCHours()).padStart(2, "0");
+    const mi = String(d.getUTCMinutes()).padStart(2, "0");
     return `${mm}-${dd} ${hh}:${mi}`;
   };
 
@@ -477,7 +501,7 @@
     const W = measureChartWidth(box);
     const H = opts.height || (W < 420 ? 196 : 228);
     const compact = W < 420;
-    const pad = { top: 16, right: 14, bottom: 26, left: compact ? 48 : 58 };
+    const pad = { top: 16, right: 14, bottom: 26, left: compact ? 54 : 64 };
     const iw = Math.max(80, W - pad.left - pad.right);
     const ih = Math.max(60, H - pad.top - pad.bottom);
 
@@ -505,7 +529,7 @@
       const v = maxY - (i / 4) * (maxY - minY);
       const y = pad.top + (i / 4) * ih;
       grid += `<line x1="${pad.left}" y1="${y.toFixed(1)}" x2="${W - pad.right}" y2="${y.toFixed(1)}" stroke="${lineCol}" stroke-dasharray="3 3" stroke-width="1"/>`;
-      grid += `<text x="${pad.left - 7}" y="${(y + 3.5).toFixed(1)}" text-anchor="end" fill="${mutedCol}" font-size="${compact ? 10 : 10.5}" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">${fmtSignedNum(v, 0)}M</text>`;
+      grid += `<text x="${pad.left - 7}" y="${(y + 3.5).toFixed(1)}" text-anchor="end" fill="${mutedCol}" font-size="${compact ? 10 : 10.5}" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">${fmtSignedMusd(v, 0)}</text>`;
     }
     grid += `<line x1="${pad.left}" y1="${zeroY.toFixed(1)}" x2="${W - pad.right}" y2="${zeroY.toFixed(1)}" stroke="${mutedCol}" stroke-width="1.2" opacity="0.85"/>`;
 
@@ -534,7 +558,7 @@
       const showTip = (clientX) => {
         const it = validItems[Number(bar.dataset.idx)];
         const rect = box.getBoundingClientRect();
-        tip.innerHTML = `<div><b>${esc(it.label)}</b></div><div class="${dirCls(it.value)}">净流向: <b>${fmtSignedNum(it.value, 1, "M$")}</b></div>${it.sub ? `<div class="muted">${esc(it.sub)}</div>` : ""}`;
+        tip.innerHTML = `<div><b>${esc(it.label)}</b></div><div class="${dirCls(it.value)}">净流向: <b>${fmtSignedMusd(it.value, 1)}</b></div>${it.sub ? `<div class="muted">${esc(it.sub)}</div>` : ""}`;
         tip.style.display = "block";
         const leftPx = Math.min(box.clientWidth - tip.offsetWidth - 10, Math.max(10, clientX - rect.left + 12));
         tip.style.left = `${leftPx}px`;
@@ -924,7 +948,24 @@
     if (sp) {
       const lat = sp.latest || {};
       const b72 = sp.band_72h;
-      const zAbs = b72 ? Math.abs(Number(b72.zscore)) : 0;
+      const zNum = strictNum(b72?.zscore);
+      const zAbs = zNum !== null ? Math.abs(zNum) : 0;
+      const zState =
+        zNum === null
+          ? ""
+          : zNum <= -2.0
+            ? "显著低于均值"
+            : zNum >= 2.0
+              ? "显著高于均值"
+              : zNum <= -1.5
+                ? "偏低于均值"
+                : zNum >= 1.5
+                  ? "偏高于均值"
+                  : zNum <= -1.0
+                    ? "略低于均值"
+                    : zNum >= 1.0
+                      ? "略高于均值"
+                      : "常态区间";
       const kpis = [
         { k: sp.leg_a, v: `$${fmtNum(lat.px_a, 2)}`, s: fmtTimeShort(lat.ts) },
         {
@@ -940,9 +981,11 @@
         },
         {
           k: "72h 常态带偏离 (Z-Score)",
-          v: b72 ? `${fmtSignedNum(b72.zscore, 2)}σ` : "--",
-          s: b72 ? `均值 ${fmtNum(b72.mean, 2)}% · 区间 ${fmtNum(b72.min, 2)}~${fmtNum(b72.max, 2)}%` : "样本积累中",
-          cls: zAbs >= 1.5 ? "warn" : zAbs >= 1.0 ? "cushion" : "",
+          v: zNum !== null ? `${fmtSignedNum(zNum, 2)}σ` : "--",
+          s: b72
+            ? `${zState ? `${zState} · ` : ""}均值 ${fmtNum(b72.mean, 2)}% (${fmtNum(b72.min, 2)}~${fmtNum(b72.max, 2)}%)`
+            : "样本积累中",
+          cls: zNum === null ? "" : zAbs >= 2.0 ? "risk" : zAbs >= 1.5 ? "warn" : zAbs >= 1.0 ? "cushion" : "",
         },
       ];
       $("spread-kpis").innerHTML = kpis
@@ -1103,29 +1146,31 @@
     const streakCls = streak ? (streak.dir === "inflow" ? "up" : "down") : "";
     const worst = sum.worst_day;
 
+    const worstVal = strictNum(worst?.musd);
+    const worstLbl = worstVal !== null && worstVal < 0 ? "最大单日流出" : "单日最小流入";
     $("etf-kpis").innerHTML = [
       {
         k: `最新单日 (${sum.latest_date || "--"})`,
-        v: fmtSignedNum(sum.latest_musd, 1, "M$"),
+        v: fmtSignedMusd(sum.latest_musd, 1),
         s: "Farside 官方收盘口径",
         cls: dirCls(sum.latest_musd),
       },
       {
         k: "近 5 交易日累计",
-        v: fmtSignedNum(sum.sum_5d_musd, 1, "M$"),
+        v: fmtSignedMusd(sum.sum_5d_musd, 1),
         s: "周度机构净流向",
         cls: dirCls(sum.sum_5d_musd),
       },
       {
         k: `近 ${days} 交易日累计`,
-        v: fmtSignedNum(sum.sum_all_musd, 1, "M$"),
+        v: fmtSignedMusd(sum.sum_all_musd, 1),
         s: "当前统计窗口汇总",
         cls: dirCls(sum.sum_all_musd),
       },
       {
         k: "连流节奏与极值日",
         v: streakText,
-        s: worst ? `最大单日流出 ${fmtSignedNum(worst.musd, 1, "M$")} (${worst.date.slice(5)})` : "--",
+        s: worst && worstVal !== null ? `${worstLbl} ${fmtSignedMusd(worstVal, 1)} (${String(worst.date || "").slice(5)})` : "--",
         cls: streakCls,
       },
     ]
@@ -1149,7 +1194,7 @@
         (r) => `
       <tr>
         <td class="mono">${esc(r.date)}</td>
-        <td class="num ${dirCls(r.total_musd)}"><b>${fmtSignedNum(r.total_musd, 1, "M$")}</b></td>
+        <td class="num ${dirCls(r.total_musd)}"><b>${fmtSignedMusd(r.total_musd, 1)}</b></td>
         <td class="small mono">${(r.issuers || [])
           .map((i) => `<span class="${dirCls(i.musd)}" style="margin-right:9px;display:inline-block;">${esc(i.ticker)} ${fmtSignedNum(i.musd, 1)}</span>`)
           .join("")}</td>
@@ -1296,22 +1341,28 @@
       );
     }
 
-    // Dynamic thead & tbody matching active strategies (ZERO empty `--` columns!)
+    // Dynamic thead & tbody matching active strategies (ZERO empty `--` columns; highlight per-asset leader!)
     $("dca-asset-thead").innerHTML =
       `<th>标的</th>` + stratOrder.map((st) => `<th class="num">${esc(st.short)}</th>`).join("");
     const assets = Object.keys(strats[stratOrder[0]?.key]?.per_asset_ret_pct || {});
     $("dca-asset-tbody").innerHTML = assets
-      .map(
-        (a) =>
+      .map((a) => {
+        const parsedRow = stratOrder.map((st) => strictNum(strats[st.key]?.per_asset_ret_pct?.[a]));
+        const validNums = parsedRow.filter((x) => x !== null);
+        const bestVal = validNums.length >= 2 ? Math.max(...validNums) : null;
+        const minVal = validNums.length >= 2 ? Math.min(...validNums) : null;
+        const hasSpread = bestVal !== null && minVal !== null && bestVal - minVal > 1e-6;
+        return (
           `<tr><td><b class="mono">${esc(a)}</b></td>` +
-          stratOrder
-            .map((st) => {
-              const v = strats[st.key]?.per_asset_ret_pct?.[a];
-              return `<td class="num ${dirCls(v)}">${fmtSignedPct(v, 2)}</td>`;
+          parsedRow
+            .map((numV) => {
+              const isBest = hasSpread && numV !== null && Math.abs(numV - bestVal) <= 1e-6;
+              return `<td class="num ${dirCls(numV)}${isBest ? " dca-best" : ""}">${isBest ? `<span class="dca-best-tag" title="该标的当前收益率领先">优</span>` : ""}${fmtSignedPct(numV, 2)}</td>`;
             })
             .join("") +
           `</tr>`
-      )
+        );
+      })
       .join("");
 
     // Curated Active Exchange Promos & Live Earn/Airdrop Radar (filterable!)
@@ -1340,6 +1391,12 @@
             const tierCls =
               ec === "WARN" ? "pill-warn" : ec === "HIGH_YIELD" ? "pill-ok" : ec === "AIRDROP" ? "pill-cushion" : "pill-muted";
             const badgeText = p.earn_cat_label || p.tier_label || p.worth_level;
+            const createdTs = strictNum(p.created_at);
+            const winText =
+              p.window ||
+              (createdTs !== null && createdTs >= 1577836800 && createdTs <= 4102444800
+                ? `发布于 ${fmtTimeShortBjt(createdTs)} BJT`
+                : "");
             return `
           <article class="promo-card">
             <div class="promo-top">
@@ -1353,7 +1410,7 @@
             }</div>
             <div class="promo-meta-row">
               ${p.reward ? `<div class="promo-kv"><span class="promo-k">收益</span><span>${esc(p.reward)}</span></div>` : ""}
-              ${p.window ? `<div class="promo-kv"><span class="promo-k">时间</span><span class="mono">${esc(p.window)}</span></div>` : ""}
+              ${winText ? `<div class="promo-kv"><span class="promo-k">时间</span><span class="mono">${esc(winText)}</span></div>` : ""}
             </div>
             ${p.summary ? `<div class="promo-desc">${esc(p.summary)}</div>` : ""}
           </article>`;

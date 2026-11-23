@@ -162,14 +162,14 @@ a:hover {
 .ribbon-scroll {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   overflow-x: auto;
   scrollbar-width: none;
   flex: 1;
   min-width: 0;
-  padding-right: 28px;
-  -webkit-mask-image: linear-gradient(to right, #000 0%, #000 calc(100% - 28px), transparent 100%);
-  mask-image: linear-gradient(to right, #000 0%, #000 calc(100% - 28px), transparent 100%);
+  padding-right: 20px;
+  -webkit-mask-image: linear-gradient(to right, #000 0%, #000 calc(100% - 20px), transparent 100%);
+  mask-image: linear-gradient(to right, #000 0%, #000 calc(100% - 20px), transparent 100%);
 }
 
 .ribbon-scroll::-webkit-scrollbar {
@@ -181,19 +181,19 @@ a:hover {
   height: 16px;
   background: var(--line-strong);
   flex: 0 0 auto;
-  margin: 0 3px;
+  margin: 0 2px;
 }
 
 .tick-pill {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   flex: 0 0 auto;
-  padding: 3px 8px;
+  padding: 2px 7px;
   background: var(--surface-2);
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
-  font-size: 11.5px;
+  font-size: 11px;
   font-family: var(--mono);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -1126,6 +1126,26 @@ a:hover {
 
 .row-risk {
   background: var(--risk-bg);
+}
+
+.dca-best {
+  font-weight: 700;
+  background: var(--accent-soft);
+}
+
+.dca-best-tag {
+  display: inline-block;
+  margin-right: 5px;
+  padding: 0 4px;
+  border-radius: 3px;
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 1.45;
+  vertical-align: 1px;
+  color: var(--accent);
+  background: var(--surface-2);
+  border: 1px solid var(--accent-border);
 }
 
 .prem-cell {

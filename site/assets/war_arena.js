@@ -201,8 +201,8 @@
       .replaceAll("'", "&#39;");
 
   const fmtCompact = (v) => {
-    const n = Number(v);
-    if (!Number.isFinite(n)) return "--";
+    const n = strictNum(v);
+    if (n === null) return "--";
     const abs = Math.abs(n);
     const sign = n < 0 ? "-" : "";
     if (abs >= 1e9) return `${sign}$${(abs / 1e9).toFixed(2)}B`;
@@ -212,19 +212,30 @@
   };
 
   const fmtSignedCompact = (v) => {
-    const n = Number(v);
-    if (!Number.isFinite(n)) return "--";
+    const n = strictNum(v);
+    if (n === null) return "--";
     return `${n > 0 ? "+" : ""}${fmtCompact(n)}`;
   };
 
   const fmtTimeShort = (ts) => {
-    const n = Number(ts);
-    if (!Number.isFinite(n) || n <= 0) return "--";
+    const n = strictNum(ts);
+    if (n === null || n <= 0) return "--";
     const d = new Date(n * 1000);
     const mm = String(d.getMonth() + 1).padStart(2, "0");
     const dd = String(d.getDate()).padStart(2, "0");
     const hh = String(d.getHours()).padStart(2, "0");
     const mi = String(d.getMinutes()).padStart(2, "0");
+    return `${mm}-${dd} ${hh}:${mi}`;
+  };
+
+  const fmtTimeShortBjt = (ts) => {
+    const n = strictNum(ts);
+    if (n === null || n <= 0) return "--";
+    const d = new Date((n + 8 * 3600) * 1000);
+    const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+    const dd = String(d.getUTCDate()).padStart(2, "0");
+    const hh = String(d.getUTCHours()).padStart(2, "0");
+    const mi = String(d.getUTCMinutes()).padStart(2, "0");
     return `${mm}-${dd} ${hh}:${mi}`;
   };
 
@@ -2253,7 +2264,7 @@
     ctx.restore();
   }
 
-  /* ---------- 1-Click Shareable 1200x675 Tactical Battle Poster PNG ---------- */
+  /* ---------- 1-Click Shareable 1200x675 Tactical Liquidation & Whale Battle Poster PNG ---------- */
   function exportBattlePoster() {
     const c = document.createElement("canvas");
     c.width = 1200;
@@ -2281,30 +2292,36 @@
 
     // Header
     ctx.fillStyle = "#38bdf8";
-    ctx.font = "700 18px ui-monospace, SFMono-Regular, Menlo, monospace";
-    ctx.fillText("DANCLUB TERMINAL · TACTICAL WHALE WAR ROOM", 54, 62);
+    ctx.font = "700 17px ui-monospace, SFMono-Regular, Menlo, monospace";
+    ctx.fillText("DANCLUB TERMINAL · LIQUIDATION RADAR & WHALE WAR ROOM", 54, 54);
     ctx.fillStyle = "#eef2f6";
-    ctx.font = "700 38px -apple-system, BlinkMacSystemFont, PingFang SC, sans-serif";
-    ctx.fillText(`${coin} 多空阵营战报 · 聪明钱 vs 反指巨鲸`, 54, 118);
+    ctx.font = "700 36px -apple-system, BlinkMacSystemFont, PingFang SC, sans-serif";
+    ctx.fillText(`${coin} 爆仓雷达与巨鲸阵营战报`, 54, 104);
     ctx.fillStyle = "#7c899e";
-    ctx.font = "500 17px ui-monospace, SFMono-Regular, Menlo, monospace";
-    ctx.fillText(`快照时间 ${fmtTimeShort(war.data?.updated_at)} BJT · 实体去重真持仓`, 54, 152);
+    ctx.font = "500 16px ui-monospace, SFMono-Regular, Menlo, monospace";
+    const whaleTs = strictNum(war.data?.updated_at);
+    ctx.fillText(
+      `巨鲸快照 ${whaleTs !== null && whaleTs > 0 ? `${fmtTimeShortBjt(whaleTs)} BJT` : "--"} · 实体去重真持仓`,
+      54,
+      136
+    );
 
     // Divergence Pill
-    const sp = div.spread_pct;
-    ctx.fillStyle = "rgba(244,63,94,0.15)";
-    ctx.strokeStyle = sp != null && sp >= 0 ? "#10b981" : "#f43f5e";
+    const sp = strictNum(div.spread_pct);
+    ctx.fillStyle = sp !== null && sp >= 0 ? "rgba(16,185,129,0.14)" : "rgba(244,63,94,0.14)";
+    ctx.strokeStyle = sp !== null && sp >= 0 ? "#10b981" : "#f43f5e";
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.roundRect(54, 178, 1092, 68, 10);
+    ctx.roundRect(54, 156, 1092, 56, 10);
     ctx.fill();
     ctx.stroke();
     ctx.fillStyle = "#eef2f6";
-    ctx.font = "700 24px -apple-system, BlinkMacSystemFont, PingFang SC, sans-serif";
+    ctx.font = "700 22px -apple-system, BlinkMacSystemFont, PingFang SC, sans-serif";
     ctx.fillText(
-      `Smart − Counter 背离度：${sp != null ? `${sp > 0 ? "+" : ""}${sp.toFixed(1)}%` : "--"}   |   ${div.label || "实盘监控中"}`,
-      80,
-      221
+      `Smart − Counter 背离度：${sp !== null ? `${sp > 0 ? "+" : ""}${sp.toFixed(1)}%` : "--"}   |   ${div.label || "实盘监控中"}`,
+      78,
+      192,
+      1044
     );
 
     // Two Faction Cards
@@ -2313,46 +2330,192 @@
       ctx.strokeStyle = "rgba(148,163,184,0.22)";
       ctx.lineWidth = 1.5;
       ctx.beginPath();
-      ctx.roundRect(x, 276, 528, 286, 12);
+      ctx.roundRect(x, 230, 534, 232, 12);
       ctx.fill();
       ctx.stroke();
 
       ctx.fillStyle = accent;
-      ctx.font = "700 22px -apple-system, BlinkMacSystemFont, PingFang SC, sans-serif";
-      ctx.fillText(title, x + 28, 322);
+      ctx.font = "700 20px -apple-system, BlinkMacSystemFont, PingFang SC, sans-serif";
+      ctx.fillText(title, x + 26, 268);
 
-      const lp = Number(obj.notional_long_pct ?? 50);
+      const lpVal = strictNum(obj.notional_long_pct);
+      const lpValid = lpVal !== null && lpVal >= 0 && lpVal <= 100;
       ctx.fillStyle = "#eef2f6";
-      ctx.font = "700 48px ui-monospace, SFMono-Regular, Menlo, monospace";
-      ctx.fillText(`${lp.toFixed(1)}% 多`, x + 28, 392);
+      ctx.font = "700 42px ui-monospace, SFMono-Regular, Menlo, monospace";
+      ctx.fillText(lpValid ? `${lpVal.toFixed(1)}% 多` : "--", x + 26, 326);
       ctx.fillStyle = "#7c899e";
-      ctx.font = "600 20px ui-monospace, SFMono-Regular, Menlo, monospace";
-      ctx.fillText(`实体 ${obj.long_entities ?? 0} 多 vs ${obj.short_entities ?? 0} 空`, x + 28, 430);
+      ctx.font = "600 18px ui-monospace, SFMono-Regular, Menlo, monospace";
+      const longEnt = strictNum(obj.long_entities);
+      const shortEnt = strictNum(obj.short_entities);
+      ctx.fillText(
+        `实体 ${longEnt !== null && longEnt >= 0 ? Math.round(longEnt) : "--"} 多 vs ${shortEnt !== null && shortEnt >= 0 ? Math.round(shortEnt) : "--"} 空`,
+        x + 26,
+        358
+      );
 
-      // Bar
-      ctx.fillStyle = "#f43f5e";
-      ctx.beginPath();
-      ctx.roundRect(x + 28, 452, 472, 16, 4);
-      ctx.fill();
-      ctx.fillStyle = "#10b981";
-      ctx.beginPath();
-      ctx.roundRect(x + 28, 452, Math.max(6, (472 * lp) / 100), 16, 4);
-      ctx.fill();
+      // Bar (hide ratio bar completely when percentage is missing or out-of-range; allow true 0% & 100%)
+      if (lpValid) {
+        ctx.fillStyle = "#f43f5e";
+        ctx.beginPath();
+        ctx.roundRect(x + 26, 374, 482, 14, 4);
+        ctx.fill();
+        if (lpVal > 0) {
+          ctx.fillStyle = "#10b981";
+          ctx.beginPath();
+          ctx.roundRect(x + 26, 374, (482 * lpVal) / 100, 14, 4);
+          ctx.fill();
+        }
+      }
 
       ctx.fillStyle = "#c5cedb";
-      ctx.font = "600 18px ui-monospace, SFMono-Regular, Menlo, monospace";
-      ctx.fillText(`多头 ${fmtCompact(obj.long_usd)}   |   空头 ${fmtCompact(obj.short_usd)}`, x + 28, 504);
-      ctx.fillStyle = (obj.net_usd || 0) >= 0 ? "#10b981" : "#f43f5e";
-      ctx.fillText(`净敞口 ${fmtSignedCompact(obj.net_usd)}`, x + 28, 538);
+      ctx.font = "600 17px ui-monospace, SFMono-Regular, Menlo, monospace";
+      ctx.fillText(`多头 ${fmtCompact(obj.long_usd)}   |   空头 ${fmtCompact(obj.short_usd)}`, x + 26, 418, 482);
+      const netVal = strictNum(obj.net_usd);
+      ctx.fillStyle = netVal === null ? "#7c899e" : netVal >= 0 ? "#10b981" : "#f43f5e";
+      ctx.fillText(`净敞口 ${fmtSignedCompact(obj.net_usd)}`, x + 26, 446, 482);
     };
 
     drawFactionCard(54, "S/A 级聪明钱阵营", "#f59e0b", sa);
-    drawFactionCard(618, "C 级反指巨鲸阵营", "#a855f7", cc);
+    drawFactionCard(612, "C 级反指巨鲸阵营", "#a855f7", cc);
+
+    // Bottom Strip — Left: CoinGlass 24h Liquidation Scoreboard
+    const liqObj = war.data?.liquidations && typeof war.data.liquidations === "object" ? war.data.liquidations : {};
+    const liq24Map = liqObj.windows?.["24h"] && typeof liqObj.windows["24h"] === "object" ? liqObj.windows["24h"] : {};
+    const coinLiq = liq24Map[coin] && typeof liq24Map[coin] === "object" ? liq24Map[coin] : null;
+    const allLiq = liq24Map.ALL && typeof liq24Map.ALL === "object" ? liq24Map.ALL : null;
+    const coinTot = strictNum(coinLiq?.total_usd);
+    const allTot = strictNum(allLiq?.total_usd);
+    // Preserve valid coin-level zero instead of silently substituting ALL; only fall back to ALL when coin bucket is missing
+    const hasCoinBucket = coinLiq !== null && coinTot !== null && coinTot >= 0;
+    const hasAllBucket = allLiq !== null && allTot !== null && allTot >= 0;
+    const activeLiq = hasCoinBucket ? coinLiq : hasAllBucket ? allLiq : null;
+    const liqScopeLabel = hasCoinBucket ? coin : "全网";
+
+    ctx.fillStyle = "#101520";
+    ctx.strokeStyle = "rgba(148,163,184,0.22)";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.roundRect(54, 480, 534, 122, 12);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = "#f59e0b";
+    ctx.font = "700 16px -apple-system, BlinkMacSystemFont, PingFang SC, sans-serif";
+    const exCnt = strictNum(liqObj.exchanges_count);
+    const liqTs = strictNum(liqObj.updated_at);
+    const liqStaleTag =
+      whaleTs !== null && whaleTs > 0 && liqTs !== null && liqTs > 0 && whaleTs - liqTs > 1800 ? " · 旧快照" : "";
+    const liqTsTag = liqTs !== null && liqTs > 0 ? ` · ${fmtTimeShortBjt(liqTs)} BJT` : "";
+    ctx.fillText(
+      `CoinGlass 24h 全网爆仓 · ${liqScopeLabel}${exCnt !== null && exCnt > 0 ? ` (${Math.round(exCnt)}所)` : ""}${liqTsTag}${liqStaleTag}`,
+      80,
+      510,
+      482
+    );
+    if (liqObj.available !== true) {
+      ctx.fillStyle = "#7c899e";
+      ctx.font = "600 16px -apple-system, BlinkMacSystemFont, PingFang SC, sans-serif";
+      ctx.fillText("CoinGlass 全网爆仓数据源暂不可用", 80, 556, 482);
+    } else if (!activeLiq) {
+      ctx.fillStyle = "#7c899e";
+      ctx.font = "600 16px -apple-system, BlinkMacSystemFont, PingFang SC, sans-serif";
+      ctx.fillText("24h 爆仓窗口数据缺失", 80, 556, 482);
+    } else {
+      const lUsd = strictNum(activeLiq.long_usd);
+      const sUsd = strictNum(activeLiq.short_usd);
+      const tUsd = strictNum(activeLiq.total_usd);
+      const liqCnt = strictNum(activeLiq.count);
+      const lValid = lUsd !== null && lUsd >= 0;
+      const sValid = sUsd !== null && sUsd >= 0;
+
+      ctx.font = "700 19px ui-monospace, SFMono-Regular, Menlo, monospace";
+      ctx.fillStyle = "#10b981";
+      ctx.fillText(`爆多 ${lValid ? fmtCompact(lUsd) : "--"}`, 80, 544, 235);
+      ctx.fillStyle = "#f43f5e";
+      ctx.textAlign = "right";
+      ctx.fillText(`爆空 ${sValid ? fmtCompact(sUsd) : "--"}`, 562, 544, 235);
+      ctx.textAlign = "left";
+
+      // Only paint split ratio when both sides are known and sum > 0; allow true 0% and 100%
+      if (lValid && sValid && lUsd + sUsd > 0) {
+        const lPct = (lUsd / (lUsd + sUsd)) * 100;
+        ctx.fillStyle = "#f43f5e";
+        ctx.beginPath();
+        ctx.roundRect(80, 558, 482, 10, 4);
+        ctx.fill();
+        if (lPct > 0) {
+          ctx.fillStyle = "#10b981";
+          ctx.beginPath();
+          ctx.roundRect(80, 558, (482 * lPct) / 100, 10, 4);
+          ctx.fill();
+        }
+      }
+
+      ctx.fillStyle = "#94a3b8";
+      ctx.font = "600 14px ui-monospace, SFMono-Regular, Menlo, monospace";
+      const totStr = tUsd !== null && tUsd >= 0 ? fmtCompact(tUsd) : "--";
+      const cntStr = liqCnt !== null && liqCnt >= 0 ? Math.round(liqCnt).toLocaleString() : "--";
+      ctx.fillText(`24h 合计 ${totStr}  ·  ${cntStr} 笔实盘强平`, 80, 588, 482);
+    }
+
+    // Bottom Strip — Right: Verified Single-Venue Flagship Liquidation Walls
+    ctx.fillStyle = "#101520";
+    ctx.strokeStyle = "rgba(148,163,184,0.22)";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.roundRect(612, 480, 534, 122, 12);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = "#38bdf8";
+    ctx.font = "700 17px -apple-system, BlinkMacSystemFont, PingFang SC, sans-serif";
+    ctx.fillText(`${coin} 实盘旗舰清算引力墙（单所精确强平价）`, 638, 510, 482);
+
+    const mag = war.data?.liq_magnets?.[coin];
+    const lw = mag && typeof mag === "object" && mag.long_wall && typeof mag.long_wall === "object" ? mag.long_wall : null;
+    const sw = mag && typeof mag === "object" && mag.short_wall && typeof mag.short_wall === "object" ? mag.short_wall : null;
+    const lNearPx = strictNum(lw?.nearest_px);
+    const lNearDist = strictNum(lw?.nearest_dist_pct);
+    const l25Usd = strictNum(lw?.within_25pct_usd);
+    const sNearPx = strictNum(sw?.nearest_px);
+    const sNearDist = strictNum(sw?.nearest_dist_pct);
+    const s25Usd = strictNum(sw?.within_25pct_usd);
+
+    ctx.font = "600 15px ui-monospace, SFMono-Regular, Menlo, monospace";
+    const hasLongWallHit = (lNearPx !== null && lNearPx > 0) || (l25Usd !== null && l25Usd > 0);
+    if (!lw) {
+      ctx.fillStyle = "#7c899e";
+      ctx.fillText("⬇ 多头墙：暂无监测数据", 638, 548, 482);
+    } else if (hasLongWallHit) {
+      ctx.fillStyle = "#10b981";
+      const pxStr = lNearPx !== null && lNearPx > 0 ? fmtPxShort(lNearPx) : "--";
+      const distStr = lNearDist !== null && lNearDist >= 0 ? `-${lNearDist.toFixed(1)}%` : "--";
+      const usdStr = l25Usd !== null && l25Usd >= 0 ? fmtCompact(l25Usd) : "--";
+      ctx.fillText(`⬇ 多头墙：${pxStr} (${distStr}) · 25%内 ${usdStr}`, 638, 548, 482);
+    } else {
+      ctx.fillStyle = "#10b981";
+      ctx.fillText("⬇ 多头墙：已覆盖，±25%内无单所旗舰强平位", 638, 548, 482);
+    }
+
+    const hasShortWallHit = (sNearPx !== null && sNearPx > 0) || (s25Usd !== null && s25Usd > 0);
+    if (!sw) {
+      ctx.fillStyle = "#7c899e";
+      ctx.fillText("⬆ 空头墙：暂无监测数据", 638, 582, 482);
+    } else if (hasShortWallHit) {
+      ctx.fillStyle = "#f43f5e";
+      const pxStr = sNearPx !== null && sNearPx > 0 ? fmtPxShort(sNearPx) : "--";
+      const distStr = sNearDist !== null && sNearDist >= 0 ? `+${sNearDist.toFixed(1)}%` : "--";
+      const usdStr = s25Usd !== null && s25Usd >= 0 ? fmtCompact(s25Usd) : "--";
+      ctx.fillText(`⬆ 空头墙：${pxStr} (${distStr}) · 25%内 ${usdStr}`, 638, 582, 482);
+    } else {
+      ctx.fillStyle = "#f43f5e";
+      ctx.fillText("⬆ 空头墙：已覆盖，±25%内无单所旗舰强平位", 638, 582, 482);
+    }
 
     // Footer Watermark
     ctx.fillStyle = "#7c899e";
-    ctx.font = "600 16px ui-monospace, SFMono-Regular, Menlo, monospace";
-    ctx.fillText("danclub.duckdns.org  ·  100% 开源免费多市场情报终端  ·  仅供客观数据研究，不构成投资建议", 54, 628);
+    ctx.font = "600 15px ui-monospace, SFMono-Regular, Menlo, monospace";
+    ctx.fillText("danclub.duckdns.org  ·  100% 开源免费多市场情报终端  ·  仅供客观数据研究，不构成投资建议", 54, 642);
 
     const a = document.createElement("a");
     a.download = `danclub-war-${coin.toLowerCase()}-${new Date().toISOString().slice(0, 10)}.png`;
@@ -3310,9 +3473,14 @@
   }
 
   function strictNum(v) {
-    if (v === null || v === undefined || v === "" || typeof v === "boolean") return null;
-    const n = Number(v);
-    return Number.isFinite(n) ? n : null;
+    if (typeof v === "number") return Number.isFinite(v) ? v : null;
+    if (typeof v === "string") {
+      const s = v.trim();
+      if (!s || !/^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test(s)) return null;
+      const n = Number(s);
+      return Number.isFinite(n) ? n : null;
+    }
+    return null;
   }
 
   function renderLiqMagnet() {

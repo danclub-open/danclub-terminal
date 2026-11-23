@@ -367,9 +367,17 @@ def _classify_earn_promo(title: str, summary: str, tier: str) -> tuple[str, str]
     txt = f"{title} {summary}"
     if tier == "WARN" or re.search(r"(?:Trading\s+Competition|交易竞赛|刷量|交易量排名|反撸)", txt, re.IGNORECASE):
         return "WARN", "慎防反撸"
-    if re.search(r"(?:Alpha\s*积分|空投|Airdrop|Pre-TGE|Launchpool|Megadrop|HODLer|打新|认购|领取\s*[\d,]+)", txt, re.IGNORECASE):
+    # Strip explicit negation clauses like "无Alpha积分或空投" / "不含空投" so Earn promos never misclassify as Airdrops
+    neg_term = r"(?:Alpha\s*积分|空投|Airdrop|打新|认购|徽章加成|奖励)"
+    airdrop_txt = re.sub(
+        rf"(?:无|不含|非|未|没有)\s*{neg_term}(?:\s*(?:或|及|与|和|、|/|,)\s*{neg_term})*",
+        "",
+        txt,
+        flags=re.IGNORECASE,
+    )
+    if re.search(r"(?:Alpha\s*积分|空投|Airdrop|Pre-TGE|Launchpool|Megadrop|HODLer|打新|认购|领取\s*[\d,]+)", airdrop_txt, re.IGNORECASE):
         return "AIRDROP", "空投·打新"
-    if re.search(r"(?:APR|APY|年化|Simple\s*Earn|Yield\s*Arena|Hold\s*&\s*Earn|活期|理财|RWA|瓜分\s*[\d万亿]+|收益率)", txt, re.IGNORECASE):
+    if re.search(r"(?:APR|APY|年化|Simple\s*Earn|Yield\s*Arena|Hold\s*&\s*Earn|活期|理财|理財|RWA|瓜分\s*[\d万亿]+|收益率)", txt, re.IGNORECASE):
         return "HIGH_YIELD", "高息理财"
     return "CAMPAIGN", "常规活动"
 
@@ -890,6 +898,21 @@ def _require_bounded_int(val: Any, field: str, lo: int = 0, hi: int = 10_000_000
     return val
 
 
+def _safe_epoch_sec(val: Any) -> int:
+    """Safely parse a strict integer Unix epoch-second timestamp (rejects bool, strings, fractional/non-finite floats, ms)."""
+    if isinstance(val, bool) or val is None:
+        return 0
+    if isinstance(val, int):
+        n = val
+    elif isinstance(val, float):
+        if not math.isfinite(val) or not val.is_integer():
+            return 0
+        n = int(val)
+    else:
+        return 0
+    return n if 1_577_836_800 <= n <= 4_102_444_800 else 0
+
+
 def _clean_bundle(bundle: dict[str, Any], *, blocklist_path: Path | None = None) -> dict[str, Any]:
     """Deep-sanitize, strictly validate count/type invariants, and enforce fail-closed firewall."""
     if not isinstance(bundle, dict):
@@ -1077,7 +1100,9 @@ def _clean_bundle(bundle: dict[str, Any], *, blocklist_path: Path | None = None)
     if liq is None and isinstance(bundle.get("liquidations"), dict):
         liq = bundle["liquidations"]
     if isinstance(liq, dict):
-        _require_bounded_int(liq.get("exchanges_count", 0), "whales.liquidations.exchanges_count", 0, 50)
+        raw_ex_cnt = liq.get("exchanges_count", 0)
+        ex_cnt_ok = not isinstance(raw_ex_cnt, bool) and isinstance(raw_ex_cnt, int) and 0 <= raw_ex_cnt <= 50
+        ex_cnt_val = raw_ex_cnt if ex_cnt_ok else 0
         clean_liq_evs = []
         for ev in liq.get("recent_events") or []:
             if not isinstance(ev, dict):
@@ -1176,10 +1201,10 @@ def _clean_bundle(bundle: dict[str, Any], *, blocklist_path: Path | None = None)
                 if valid_series and len(pts) == 24:
                     clean_hourly[sc] = pts
         whales["liquidations"] = {
-            "available": bool(liq.get("available")),
+            "available": bool(liq.get("available")) and ex_cnt_ok,
             "source": sanitize_text(liq.get("source"), max_len=48) or "CoinGlass 全网永续强平统计",
-            "updated_at": int(liq.get("updated_at") or 0),
-            "exchanges_count": int(liq.get("exchanges_count") or 0),
+            "updated_at": _safe_epoch_sec(liq.get("updated_at")),
+            "exchanges_count": ex_cnt_val,
             "windows": clean_wins,
             "hourly_24h": clean_hourly,
             "recent_events": clean_liq_evs[:40],
@@ -1197,24 +1222,72 @@ def _clean_bundle(bundle: dict[str, Any], *, blocklist_path: Path | None = None)
             "wick_alerts": [],
         }
 
-    # Inject Smart-vs-Counter extreme whale divergence signal into Overview desk_signals (top-of-screen hook!)
+    # Inject Smart-vs-Counter extreme whale divergence & 1h liquidation pulse signals into Overview desk_signals
+    injected_war_sigs: list[dict[str, Any]] = []
+    liq_clean = whales.get("liquidations")
+    liq_wins = liq_clean.get("windows") if isinstance(liq_clean, dict) else None
+    liq_1h_map = liq_wins.get("1h") if isinstance(liq_wins, dict) else None
+    liq_all_1h = liq_1h_map.get("ALL") if isinstance(liq_1h_map, dict) else None
+    if isinstance(liq_clean, dict) and liq_clean.get("available") is True and isinstance(liq_all_1h, dict):
+        liq_upd = _safe_epoch_sec(liq_clean.get("updated_at"))
+        gen_ts = _safe_epoch_sec(bundle["meta"].get("generated_ts"))
+        liq_fresh = liq_upd > 0 and gen_ts > 0 and -300 <= (gen_ts - liq_upd) <= 1800
+        raw_tot = liq_all_1h.get("total_usd")
+        raw_lng = liq_all_1h.get("long_usd")
+        raw_sht = liq_all_1h.get("short_usd")
+        if (
+            liq_fresh
+            and not any(isinstance(v, bool) for v in (raw_tot, raw_lng, raw_sht))
+            and all(isinstance(v, (int, float)) for v in (raw_tot, raw_lng, raw_sht))
+        ):
+            tot_1h, lng_1h, sht_1h = float(raw_tot), float(raw_lng), float(raw_sht)
+            sum_ls = lng_1h + sht_1h
+            reconciled = sum_ls > 0 and abs(tot_1h - sum_ls) <= max(1_000_000.0, tot_1h * 0.05)
+            if (
+                math.isfinite(tot_1h)
+                and math.isfinite(lng_1h)
+                and math.isfinite(sht_1h)
+                and lng_1h >= 0
+                and sht_1h >= 0
+                and tot_1h >= 15_000_000
+                and reconciled
+            ):
+                if lng_1h >= sum_ls * 0.60:
+                    dom_txt = "多头偏重"
+                elif sht_1h >= sum_ls * 0.60:
+                    dom_txt = "空头偏重"
+                else:
+                    dom_txt = "多空均衡"
+                injected_war_sigs.append({
+                    "severity": "danger" if tot_1h >= 40_000_000 else "warn",
+                    "tag": "全网强平脉冲",
+                    "title": f"近 1 小时全网强平达 ${tot_1h / 1e6:.1f}M（{dom_txt}）",
+                    "metric": f"1h ${tot_1h / 1e6:.1f}M",
+                    "detail": f"爆多 ${lng_1h / 1e6:.1f}M vs 爆空 ${sht_1h / 1e6:.1f}M · 点击进爆仓战情室",
+                    "target_tab": "war",
+                })
+
     btc_coh = (whales.get("cohorts") or {}).get("BTC") or {}
     div = btc_coh.get("divergence")
     if isinstance(div, dict) and div.get("spread_pct") is not None and abs(float(div["spread_pct"])) >= 30.0:
         sa = btc_coh.get("SMART_SA") or {}
         cc = btc_coh.get("COUNTER_C") or {}
-        whale_sig = {
+        injected_war_sigs.append({
             "severity": "danger" if float(div["spread_pct"]) < 0 else "opportunity",
             "tag": "巨鲸阵营背离",
             "title": "BTC 聪明钱 vs 反指巨鲸对撞",
             "metric": f"差值 {float(div['spread_pct']):+.1f}%",
-            "detail": f"S级聪明钱 {sa.get('notional_long_pct', 0):.0f}%多 vs C级反指 {cc.get('notional_long_pct', 0):.0f}%多 · 点击进空战战情室",
+            "detail": f"S级聪明钱 {sa.get('notional_long_pct', 0):.0f}%多 vs C级反指 {cc.get('notional_long_pct', 0):.0f}%多 · 点击进爆仓战情室",
             "target_tab": "war",
-        }
-        sigs = bundle["overview"].get("desk_signals")
-        if isinstance(sigs, list):
-            sigs = [s for s in sigs if isinstance(s, dict) and s.get("tag") != "巨鲸阵营背离"]
-            bundle["overview"]["desk_signals"] = [whale_sig, *sigs][:5]
+        })
+
+    sigs = bundle["overview"].get("desk_signals")
+    if isinstance(sigs, list):
+        sigs = [s for s in sigs if isinstance(s, dict) and s.get("tag") not in ("全网强平脉冲", "巨鲸阵营背离")]
+        sev_rank = {"danger": 0, "warn": 1, "opportunity": 2, "info": 3}
+        merged_sigs = [*injected_war_sigs, *sigs]
+        merged_sigs.sort(key=lambda s: sev_rank.get(str(s.get("severity") or "info"), 3))
+        bundle["overview"]["desk_signals"] = merged_sigs[:5]
 
     # Ensure endpoints meta advertises whales.json
     if isinstance(bundle["meta"].get("endpoints"), dict):

@@ -1014,6 +1014,277 @@ class TestExporterIntegrityAndHygiene(unittest.TestCase):
         ):
             self.assertIn(needle, war_js)
 
+    def test_cross_tab_polish_promo_classification_liq_signal_and_etf_units(self) -> None:
+        # 1. Negated Alpha / conjoined negation MUST NOT misclassify as AIRDROP; Traditional 理財 alone -> HIGH_YIELD
+        self.assertEqual(
+            syncer._classify_earn_promo(
+                "币安理财周报：申购榜单瓜分30万美元",
+                "加息档：USDT首1,000枚+8%；无Alpha积分或徽章加成 · Simple Earn榜单",
+                "LOW_RISK",
+            ),
+            ("HIGH_YIELD", "高息理财"),
+        )
+        self.assertEqual(
+            syncer._classify_earn_promo("不含Alpha积分或空投的活期理财", "稳定币池", "LOW_RISK"),
+            ("HIGH_YIELD", "高息理财"),
+        )
+        # Positive sentence after negation clause MUST still classify as AIRDROP
+        self.assertEqual(
+            syncer._classify_earn_promo("无手续费。现在领取 500 枚 STBL 空投", "限期活动", "HIGH"),
+            ("AIRDROP", "空投·打新"),
+        )
+        # Traditional Chinese 理財 without 活期 -> proves 理財 branch itself works
+        self.assertEqual(
+            syncer._classify_earn_promo("Bybit 理財專區新品上線", "穩健收益策略", "LOW_RISK"),
+            ("HIGH_YIELD", "高息理财"),
+        )
+        self.assertEqual(
+            syncer._classify_earn_promo("STBL 现已在币安 Alpha 上线", "拥有至少 250 点币安 Alpha 积分即可领取空投", "HIGH"),
+            ("AIRDROP", "空投·打新"),
+        )
+        self.assertEqual(
+            syncer._classify_earn_promo("WSOT 2026 更新：降低交易量门槛", "战队争霸赛热身挑战", "LOW_RISK"),
+            ("CAMPAIGN", "常规活动"),
+        )
+
+        # 2. _clean_bundle 1h liquidation pulse: freshness, consistency, thresholds, direction, malformed survival & priority
+        with tempfile.TemporaryDirectory() as td:
+            d = Path(td)
+            self._seed_dbs(d, include_wallet=False, dca_days=3)
+            base_bundle = exp.build_bundle(d)
+            gen_ts = int(base_bundle["meta"]["generated_ts"])
+
+            def make_liq_bundle(total_usd, long_usd, short_usd, upd_ts=None, gen_override=None, raw_liq=None):
+                b = json.loads(json.dumps(base_bundle))
+                if gen_override is not None:
+                    b["meta"]["generated_ts"] = gen_override
+                b["whales"] = {
+                    "available": True,
+                    "updated_at": gen_ts - 60,
+                    "stats": {"tracked_addresses": 10, "profiled_whales": 5, "active_entities": 2},
+                    "cohorts": {
+                        "BTC": {
+                            "SMART_SA": {"notional_long_pct": 20.0},
+                            "COUNTER_C": {"notional_long_pct": 85.0},
+                            "divergence": {"spread_pct": -65.0},
+                        }
+                    },
+                    "flagships": [],
+                    "liquidations": raw_liq
+                    if raw_liq is not None
+                    else {
+                        "available": True,
+                        "source": "CoinGlass",
+                        "updated_at": gen_ts - 120 if upd_ts is None else upd_ts,
+                        "exchanges_count": 9,
+                        "windows": {
+                            "1h": {
+                                "ALL": {
+                                    "long_usd": long_usd,
+                                    "short_usd": short_usd,
+                                    "total_usd": total_usd,
+                                    "count": 420,
+                                    "top_exchanges": [],
+                                }
+                            }
+                        },
+                    },
+                }
+                return b
+
+            # 2a. Fresh $28.5M long-skewed -> warn, "多头偏重", absolute wording, updated "爆仓战情室"
+            cleaned_warn = syncer._clean_bundle(make_liq_bundle(28_500_000.0, 20_500_000.0, 8_000_000.0), blocklist_path=Path("/nonexistent"))
+            liq_sig = next((s for s in cleaned_warn["overview"]["desk_signals"] if s.get("tag") == "全网强平脉冲"), None)
+            self.assertIsNotNone(liq_sig)
+            self.assertEqual(liq_sig["severity"], "warn")
+            self.assertEqual(liq_sig["target_tab"], "war")
+            self.assertEqual(liq_sig["metric"], "1h $28.5M")
+            self.assertIn("多头偏重", liq_sig["title"])
+            self.assertIn("爆仓战情室", liq_sig["detail"])
+            whale_sig = next((s for s in cleaned_warn["overview"]["desk_signals"] if s.get("tag") == "巨鲸阵营背离"), None)
+            self.assertIsNotNone(whale_sig)
+            self.assertIn("爆仓战情室", whale_sig["detail"])
+            self.assertNotIn("空战战情室", whale_sig["detail"])
+
+            # 2b. Fresh $40M balanced ($20M/$20M) -> danger + "多空均衡" (NOT false "多头集中"!)
+            cleaned_bal = syncer._clean_bundle(make_liq_bundle(40_000_000.0, 20_000_000.0, 20_000_000.0), blocklist_path=Path("/nonexistent"))
+            bal_sig = next((s for s in cleaned_bal["overview"]["desk_signals"] if s.get("tag") == "全网强平脉冲"), None)
+            self.assertIsNotNone(bal_sig)
+            self.assertEqual(bal_sig["severity"], "danger")
+            self.assertIn("多空均衡", bal_sig["title"])
+
+            # 2c. Inconsistent breakdown (total=40M, long=0, short=0) -> fail-closed skip
+            cleaned_bad_sum = syncer._clean_bundle(make_liq_bundle(40_000_000.0, 0.0, 0.0), blocklist_path=Path("/nonexistent"))
+            self.assertFalse(any(s.get("tag") == "全网强平脉冲" for s in cleaned_bad_sum["overview"]["desk_signals"]))
+
+            # 2d. Missing / invalid / fractional generated_ts or stale (>30m) or sub-threshold (<$15M) -> fail-closed skip
+            for case_b in (
+                make_liq_bundle(28_500_000.0, 20_500_000.0, 8_000_000.0, gen_override=0),
+                make_liq_bundle(28_500_000.0, 20_500_000.0, 8_000_000.0, gen_override="1795436604"),
+                make_liq_bundle(28_500_000.0, 20_500_000.0, 8_000_000.0, upd_ts=gen_ts - 1800, gen_override=float(gen_ts) + 0.5),
+                make_liq_bundle(28_500_000.0, 20_500_000.0, 8_000_000.0, upd_ts=gen_ts - 3600),
+                make_liq_bundle(5_000_000.0, 3_000_000.0, 2_000_000.0),
+            ):
+                cl = syncer._clean_bundle(case_b, blocklist_path=Path("/nonexistent"))
+                self.assertFalse(any(s.get("tag") == "全网强平脉冲" for s in cl["overview"]["desk_signals"]))
+
+            # 2e. Malformed liquidation payload (updated_at="N/A", exchanges_count="N/A", list windows, list liquidations) MUST NOT crash _clean_bundle!
+            for bad_liq in (
+                {"available": True, "updated_at": "N/A", "exchanges_count": "N/A", "windows": ["bad"]},
+                ["not-a-dict"],
+            ):
+                cl_ok = syncer._clean_bundle(make_liq_bundle(0, 0, 0, raw_liq=bad_liq), blocklist_path=Path("/nonexistent"))
+                self.assertFalse(any(s.get("tag") == "全网强平脉冲" for s in cl_ok["overview"]["desk_signals"]))
+                self.assertTrue(cl_ok["overview"]["bottom_dashboard"]["total"] > 0)
+
+            # 2f. Priority ordering: $15M warn MUST NOT evict existing danger signals when 5 dangers already exist
+            b_prio = make_liq_bundle(16_000_000.0, 12_000_000.0, 4_000_000.0)
+            b_prio["whales"]["cohorts"]["BTC"]["divergence"]["spread_pct"] = 0.0
+            b_prio["overview"]["desk_signals"] = [
+                {"severity": "danger", "tag": f"D{i}", "title": f"Danger {i}", "metric": "1", "detail": "d", "target_tab": "overview"}
+                for i in range(5)
+            ]
+            cl_prio = syncer._clean_bundle(b_prio, blocklist_path=Path("/nonexistent"))
+            self.assertEqual(len(cl_prio["overview"]["desk_signals"]), 5)
+            self.assertTrue(all(s["severity"] == "danger" for s in cl_prio["overview"]["desk_signals"]))
+
+        # 3. Frontend HTML/JS structure + real Node.js behavioral checks (strictNum, DCA ranking, War Poster edge cases)
+        import subprocess
+        html = (ROOT / "site" / "index.html").read_text(encoding="utf-8")
+        app_js = (ROOT / "site" / "assets" / "app.js").read_text(encoding="utf-8")
+        war_js = (ROOT / "site" / "assets" / "war_arena.js").read_text(encoding="utf-8")
+        self.assertIn("净流向 ($M)", html)
+        self.assertIn("主要发行商分项明细 ($M)", html)
+        self.assertNotIn("净流向 (M$)", html)
+        self.assertIn("fmtSignedMusd", app_js)
+        self.assertNotIn('"M$"', app_js)
+
+        node_script = r"""
+const fs = require("fs");
+const vm = require("vm");
+const assert = require("assert");
+
+// A. Test app.js strictNum / fmtSignedMusd / DCA winner logic directly via extracted helpers
+const appSrc = fs.readFileSync(process.argv[1], "utf8");
+const mStrict = appSrc.match(/const strictNum = [\s\S]*?^\s*const fmtTimeShortBjt = [\s\S]*?^\s*\};/m);
+assert(mStrict, "strictNum helpers not found in app.js");
+const helpers = vm.runInNewContext(mStrict[0] + "\n({ strictNum, fmtNum, fmtSignedPct, fmtSignedMusd, dirCls, fmtTimeShortBjt });");
+assert.strictEqual(helpers.strictNum("   "), null);
+assert.strictEqual(helpers.strictNum([]), null);
+assert.strictEqual(helpers.strictNum([5]), null);
+assert.strictEqual(helpers.strictNum(true), null);
+assert.strictEqual(helpers.strictNum(null), null);
+assert.strictEqual(helpers.strictNum("-124.5"), -124.5);
+assert.strictEqual(helpers.fmtSignedMusd(-124.5, 1), "-$124.5M");
+assert.strictEqual(helpers.fmtSignedMusd(0, 1), "$0.0M");
+assert.strictEqual(helpers.fmtSignedMusd("   ", 1), "--");
+assert.strictEqual(helpers.fmtSignedMusd([], 1), "--");
+assert.strictEqual(helpers.fmtSignedPct("   ", 2), "--");
+// Exact UTC+8 BJT check: 1700000000 = 2023-11-14 22:13:20 UTC = 11-15 06:13 BJT
+assert.strictEqual(helpers.fmtTimeShortBjt(1700000000), "11-15 06:13");
+// Missing strategy ("   " / []) vs single negative strategy (-3.0) MUST NOT mark anyone best
+const rowVals = [-3.0, "   ", []].map(helpers.strictNum);
+const valid = rowVals.filter((x) => x !== null);
+assert.strictEqual(valid.length, 1);
+
+// B. Test war_arena.js exportBattlePoster edge cases via Canvas mock
+const warSrc = fs.readFileSync(process.argv[2], "utf8");
+const mWarStrict = warSrc.match(/function strictNum\(v\)[\s\S]*?^  \}/m);
+const mWarFmts = warSrc.match(/const fmtCompact = [\s\S]*?^  const fmtTimeShortBjt = [\s\S]*?^  \};/m);
+const mPoster = warSrc.match(/function exportBattlePoster\(\)[\s\S]*?^  \}/m);
+assert(mWarStrict && mWarFmts && mPoster, "war_arena.js poster helpers not found");
+
+function runPoster(warData) {
+  const texts = [];
+  const rects = [];
+  const ctx = {
+    fillStyle: "", strokeStyle: "", lineWidth: 1, font: "", textAlign: "left",
+    fillRect() {}, beginPath() {}, fill() {}, stroke() {},
+    roundRect(x, y, w, h) { rects.push({ x, y, w, h }); },
+    createRadialGradient() { return { addColorStop() {} }; },
+    fillText(t) { texts.push(String(t)); },
+  };
+  const sandbox = {
+    war: { activeCoin: "BTC", data: warData },
+    fmtPxShort: (v) => `$${Number(v).toLocaleString("en-US")}`,
+    document: {
+      createElement(tag) {
+        if (tag === "canvas") return { width: 0, height: 0, getContext: () => ctx, toDataURL: () => "data:image/png;base64," };
+        return { download: "", href: "", click() {} };
+      },
+    },
+    Date, Math, Number, String, Boolean, Object, Array,
+  };
+  vm.runInNewContext(mWarStrict[0] + "\n" + mWarFmts[0] + "\n" + mPoster[0] + "\nexportBattlePoster();", sandbox);
+  return { texts, rects };
+}
+
+// Case 1: Coin has genuine $0 liquidations + out-of-range 140% cohort + missing liq_magnets[BTC]
+const r1 = runPoster({
+  updated_at: 1795436600,
+  cohorts: { BTC: { SMART_SA: { notional_long_pct: 140, long_entities: 2, short_entities: 1, long_usd: null, short_usd: null, net_usd: null }, COUNTER_C: { notional_long_pct: null }, divergence: {} } },
+  liquidations: {
+    available: true,
+    updated_at: 1795432000, // >30m older than whale snapshot -> stale badge!
+    exchanges_count: 9,
+    windows: {
+      "24h": {
+        BTC: { total_usd: 0, long_usd: 0, short_usd: 0, count: 0 },
+        ALL: { total_usd: 99000000, long_usd: 50000000, short_usd: 49000000, count: 500 },
+      },
+    },
+  },
+  liq_magnets: {},
+});
+const t1 = r1.texts;
+assert(t1.some((s) => s.includes("CoinGlass 24h 全网爆仓 · BTC") && s.includes("旧快照")), "Must keep BTC scope and mark stale: " + t1.join(" | "));
+assert(!t1.some((s) => s.includes("暂不可用") || s.includes("数据缺失")), "Valid zero coin must NOT show unavailable");
+assert(t1.some((s) => s === "--"), "Out-of-range 140% must print -- not 100.0%");
+assert(!t1.some((s) => s.includes("100.0% 多") || s.includes("50.0% 多")), "Must not clamp 140% or fake 50%");
+assert(!r1.rects.some((b) => b.y === 374 && b.h === 14), "Out-of-range/missing cohort pct must hide ratio bar completely");
+assert(t1.some((s) => s.includes("多头墙：暂无监测数据")), "Missing liq_magnets must show unknown, not empty wall");
+
+// Case 2: Missing long_usd/count -> "--"; wall with nearest_px + null dist_pct MUST NOT claim no wall!
+const r2 = runPoster({
+  updated_at: 1795436600,
+  cohorts: { BTC: { SMART_SA: { notional_long_pct: 100 }, COUNTER_C: { notional_long_pct: 0 }, divergence: { spread_pct: 100 } } },
+  liquidations: {
+    available: true,
+    updated_at: 1795436550,
+    exchanges_count: 9,
+    windows: { "24h": { BTC: { total_usd: 1200000, long_usd: null, short_usd: 1200000, count: null } } },
+  },
+  liq_magnets: {
+    BTC: {
+      long_wall: { nearest_px: null, nearest_dist_pct: null, within_25pct_usd: 0 },
+      short_wall: { nearest_px: 65000, nearest_dist_pct: null, within_25pct_usd: 15000000 },
+    },
+  },
+});
+const t2 = r2.texts;
+assert(t2.some((s) => s === "爆多 --"), "Missing long_usd must render --: " + t2.join(" | "));
+assert(t2.some((s) => s.includes("-- 笔实盘强平")), "Missing count must render -- 笔");
+assert(t2.some((s) => s.includes("已覆盖，±25%内无单所旗舰强平位")), "Covered empty wall should be distinguished");
+assert(t2.some((s) => s.includes("⬆ 空头墙：$65,000 (--) · 25%内 $15.00M")), "Partial wall with price/usd must NOT say empty wall: " + t2.join(" | "));
+
+// Case 3: available=true with empty windows["24h"] must show window-missing message (distinct from unavailable)
+const r3 = runPoster({
+  updated_at: 1795436600,
+  cohorts: {},
+  liquidations: { available: true, updated_at: 1795436550, exchanges_count: 9, windows: { "24h": {} } },
+  liq_magnets: {},
+});
+assert(r3.texts.some((s) => s.includes("24h 爆仓窗口数据缺失")), "Must distinguish missing 24h window from unavailable");
+"""
+        proc = subprocess.run(
+            ["node", "-e", node_script, str(ROOT / "site" / "assets" / "app.js"), str(ROOT / "site" / "assets" / "war_arena.js")],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, msg=f"Node behavior test failed:\n{proc.stderr}\n{proc.stdout}")
+
 
 if __name__ == "__main__":
     unittest.main()
