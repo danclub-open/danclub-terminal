@@ -151,13 +151,19 @@
     longs.sort((a, b) => b.pos.usd - a.pos.usd);
     shorts.sort((a, b) => b.pos.usd - a.pos.usd);
 
+    const narrow = war.cssW > 0 && war.cssW < 540;
+    const maxPerSide = narrow ? 3 : 6;
     const placeSide = (arr, side) => {
-      const top = arr.slice(0, 6);
+      const top = arr.slice(0, maxPerSide);
       top.forEach((it, idx) => {
         const rows = Math.max(1, top.length);
         const yFrac = (idx + 0.85) / (rows + 0.7);
-        const xBase = side === "LONG" ? 0.075 + (idx % 2) * 0.095 : 0.925 - (idx % 2) * 0.095;
-        const size = Math.max(15, Math.min(30, 11 + Math.log10(Math.max(1e6, it.pos.usd) / 1e6) * 9.5));
+        const xBase = narrow
+          ? (side === "LONG" ? 0.16 : 0.84)
+          : (side === "LONG" ? 0.075 + (idx % 2) * 0.095 : 0.925 - (idx % 2) * 0.095);
+        const sizeBase = narrow ? 13 : 15;
+        const sizeMax = narrow ? 22 : 30;
+        const size = Math.max(sizeBase, Math.min(sizeMax, (narrow ? 9 : 11) + Math.log10(Math.max(1e6, it.pos.usd) / 1e6) * (narrow ? 7 : 9.5)));
         war.carriers.push({
           ent: it.ent,
           pos: it.pos,
@@ -483,14 +489,18 @@
       });
     }
 
-    // Compact tactical nameplate under flagship
-    ctx.font = "600 10px ui-monospace, SFMono-Regular, Menlo, monospace";
+    // Compact tactical nameplate under flagship (clamped safely inside canvas width on mobile)
+    const narrow = war.cssW < 540;
+    const tag = `[${tierCode}] ${c.ent.display.slice(0, narrow ? 10 : 12)}`;
+    const amtTxt = `${isLong ? "+" : "-"}${fmtCompact(c.pos.usd)}`;
+    ctx.font = `600 ${narrow ? 9 : 10}px ui-monospace, SFMono-Regular, Menlo, monospace`;
     ctx.textAlign = "center";
+    const halfW = Math.max(ctx.measureText(tag).width, ctx.measureText(amtTxt).width) / 2 + 6;
+    const labelOffsetX = Math.max(halfW - x, Math.min(war.cssW - halfW - x, 0));
     ctx.fillStyle = haloCol;
-    const tag = `[${tierCode}] ${c.ent.display.slice(0, 12)}`;
-    ctx.fillText(tag, 0, s + 13);
+    ctx.fillText(tag, labelOffsetX, s + (narrow ? 11 : 13));
     ctx.fillStyle = "rgba(226, 232, 240, 0.85)";
-    ctx.fillText(`${isLong ? "+" : "-"}${fmtCompact(c.pos.usd)}`, 0, s + 24);
+    ctx.fillText(amtTxt, labelOffsetX, s + (narrow ? 21 : 24));
 
     ctx.restore();
   }
@@ -504,6 +514,7 @@
     const isFs = Boolean(document.fullscreenElement);
     const w = Math.max(280, Math.floor(wrap.clientWidth));
     const h = isFs ? Math.max(460, window.innerHeight - 190) : w < 520 ? 280 : 350;
+    const wasNarrow = war.cssW > 0 && war.cssW < 540;
     war.dpr = Math.min(2, window.devicePixelRatio || 1);
     war.cssW = w;
     war.cssH = h;
@@ -511,6 +522,7 @@
     canvas.height = Math.floor(h * war.dpr);
     canvas.style.width = `${w}px`;
     canvas.style.height = `${h}px`;
+    if (war.data && wasNarrow !== (w < 540)) rebuildCarriers();
   }
 
   function updateHudMetrics(now) {
@@ -1119,7 +1131,7 @@
               <span class="${sideCls}"><b>${esc(f.primary_coin)} ${f.primary_side === "LONG" ? "多" : "空"}</b></span>
               <span class="muted"> ${fmtCompact(f.primary_usd)}</span>
             </td>
-            <td class="num"><b>${fmtCompact(f.total_notional_usd)}</b></td>
+            <td class="num hide-xs"><b>${fmtCompact(f.total_notional_usd)}</b></td>
             <td class="hide-sm">
               <span class="pill ${actCls}">${esc(f.action)}</span>
               ${f.delta_usd != null && Math.abs(f.delta_usd) >= 500000 ? `<span class="muted small mono"> ${fmtSignedCompact(f.delta_usd)}${f.delta_window_h ? ` (${f.delta_window_h >= 20 ? "24h" : `${f.delta_window_h}h`})` : ""}</span>` : ""}

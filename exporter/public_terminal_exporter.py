@@ -1067,11 +1067,17 @@ def export_flows(data_dir: Path, *, now_sec: int | None = None) -> dict[str, Any
 
 def _parse_promo_expiry(text: str, now_dt: datetime) -> datetime | None:
     """Extract the explicit end date from promo text to filter out expired campaigns."""
-    # Pattern 1: explicit range end date "~ 12-18 08:00" / "至 12-01 07:59" (avoid bare '-' inside MM-DD)
-    m_range = re.search(r"[~～至到]\s*(?:(\d{4})[-/.年])?(\d{1,2})[-/.月](\d{1,2})日?(?:\s*(\d{1,2}):(\d{2}))?", text)
-    if m_range:
-        yr_s, mo_s, dy_s, hh_s, mm_s = m_range.groups()
+    # Pattern 1: explicit range end date "~ 12-18 08:00" / "至 12-01 07:59" (iterate all matches so
+    # earlier numeric ranges like "估值1.26~1.41万亿" do not mask a real date range later in the text)
+    for m_range in re.finditer(
+        r"[~～至到]\s*(?:(\d{4})[-/.年])?(\d{1,2})([-/.月])(\d{1,2})日?(?![\d.%万亿U美元])(?:\s*(\d{1,2}):(\d{2}))?",
+        text,
+    ):
+        yr_s, mo_s, sep, dy_s, hh_s, mm_s = m_range.groups()
         mo, dy = int(mo_s), int(dy_s)
+        if sep == "." and not yr_s and not hh_s:
+            # Skip ambiguous decimal ranges like "1.26~1.41" unless accompanied by year or time
+            continue
         if 1 <= mo <= 12 and 1 <= dy <= 31:
             yr = int(yr_s) if yr_s else (now_dt.year + 1 if mo < now_dt.month - 6 else now_dt.year)
             hh = int(hh_s) if hh_s else 23
@@ -1081,8 +1087,7 @@ def _parse_promo_expiry(text: str, now_dt: datetime) -> datetime | None:
             except ValueError:
                 pass
     # Pattern 2: "最迟11月20日" / "截止 11月24日"
-    m_end = re.search(r"(?:最迟|截止|截至)\s*(?:(\d{4})年)?(\d{1,2})月(\d{1,2})日?", text)
-    if m_end:
+    for m_end in re.finditer(r"(?:最迟|截止|截至)\s*(?:(\d{4})年)?(\d{1,2})月(\d{1,2})日?", text):
         yr_s, mo_s, dy_s = m_end.groups()
         mo, dy = int(mo_s), int(dy_s)
         if 1 <= mo <= 12 and 1 <= dy <= 31:
@@ -1115,10 +1120,19 @@ def _parse_clean_promo(r: dict[str, Any], now_dt: datetime) -> dict[str, Any] | 
     if expiry_dt is not None and expiry_dt < now_dt:
         return None
 
-    # Reject stale promos (>14 days old) unless a parsed future deadline proves it's still active
+    # Reject stale promos (>14 days old, or titled with an explicit date >10 days ago without a future deadline)
     created_at = _int_or_zero(r.get("created_at"))
-    if expiry_dt is None and created_at > 0 and (int(now_dt.timestamp()) - created_at) > 14 * 86400:
-        return None
+    if expiry_dt is None:
+        if created_at > 0 and (int(now_dt.timestamp()) - created_at) > 14 * 86400:
+            return None
+        m_title_dt = re.search(r"\((\d{4})-(\d{2})-(\d{2})\)", title)
+        if m_title_dt:
+            try:
+                td = datetime(int(m_title_dt.group(1)), int(m_title_dt.group(2)), int(m_title_dt.group(3)), tzinfo=BJT)
+                if (now_dt - td).days > 10:
+                    return None
+            except ValueError:
+                pass
 
     reward = ""
     window = ""

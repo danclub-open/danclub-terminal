@@ -103,6 +103,7 @@ html, body {
   font-size: 14px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+  overflow-x: clip;
 }
 
 a {
@@ -1620,12 +1621,16 @@ a:hover {
   padding: 18px 20px 28px;
   z-index: 100;
   overflow-y: auto;
+  visibility: hidden;
+  pointer-events: none;
   transform: translateX(102%);
-  transition: transform 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+  transition: transform 0.22s cubic-bezier(0.22, 1, 0.36, 1), visibility 0.22s;
   box-shadow: -12px 0 40px rgba(0, 0, 0, 0.45);
 }
 
 .whale-drawer.open {
+  visibility: visible;
+  pointer-events: auto;
   transform: translateX(0);
 }
 

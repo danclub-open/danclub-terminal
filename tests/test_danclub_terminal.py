@@ -483,6 +483,46 @@ class TestExporterIntegrityAndHygiene(unittest.TestCase):
             self.assertEqual(e3["action"], "持仓")           # NOT false '加仓'!
             self.assertIsNone(e3["alltime_pnl"])            # 1/2 partial coverage -> None!
 
+    def test_promo_expiry_not_masked_by_earlier_numeric_tilde_range(self) -> None:
+        now_dt = datetime(2026, 11, 23, 16, 0, tzinfo=exp.BJT)
+        # Earlier "估值1.26~1.41万亿美元" must NOT mask "11-18 14:00 ~ 11-18 22:00"
+        row_expired = {
+            "exchange": "Binance",
+            "title": "币安钱包Anthropic代币化股票认购",
+            "worth_level": "重点关注",
+            "promo_type": "认购",
+            "summary_text": "收益/奖池：参考价70~78U | 估值1.26~1.41万亿美元\n活动时间：11-18 14:00 ~ 11-18 22:00 (北京时间)",
+            "url": "https://www.binance.com/en/support/announcement/test-expired",
+            "created_at": int(now_dt.timestamp()) - 3 * 86400,
+        }
+        self.assertIsNone(exp._parse_clean_promo(row_expired, now_dt))
+
+        # Explicit past title date >10 days ago with no future window must be filtered out
+        row_stale_title = {
+            "exchange": "Binance",
+            "title": "Binance Alpha Trading Competition: Trade LAB (2026-11-12)",
+            "worth_level": "反撸",
+            "promo_type": "刷量竞赛",
+            "summary_text": "收益/奖池：约 $20.0万",
+            "url": "https://www.binance.com/en/support/announcement/test-stale",
+            "created_at": int(now_dt.timestamp()) - 6 * 86400,
+        }
+        self.assertIsNone(exp._parse_clean_promo(row_stale_title, now_dt))
+
+        # Active future window MUST still pass
+        row_active = {
+            "exchange": "Binance",
+            "title": "币安持有RLUSD瓜分60万XRP",
+            "worth_level": "常规",
+            "promo_type": "持仓瓜分",
+            "summary_text": "收益/奖池：60万XRP | 估值1.2~1.5倍\n活动时间：11-20 08:00 ~ 12-18 08:00 (北京时间)",
+            "url": "https://www.binance.com/en/support/announcement/test-active",
+            "created_at": int(now_dt.timestamp()) - 2 * 86400,
+        }
+        parsed = exp._parse_clean_promo(row_active, now_dt)
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed["exchange"], "Binance")
+
     def test_frontend_zero_svg_distortion_and_has_x_axis(self) -> None:
         js = (ROOT / "site" / "assets" / "app.js").read_text(encoding="utf-8")
         war_js = (ROOT / "site" / "assets" / "war_arena.js").read_text(encoding="utf-8")
