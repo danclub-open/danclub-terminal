@@ -5,6 +5,26 @@
   const $ = (id) => document.getElementById(id);
   const COINS = ["BTC", "ETH", "SOL", "HYPE"];
 
+  /* 5 International Climax War Anthems (Public Domain / CC-BY Wikimedia Commons, 24-26s peak cuts) */
+  const WAR_TRACKS = [
+    { id: "valkyries",    file: "./assets/audio/valkyries.mp3",    label: "🇩🇪 德 · 女武神的骑行 (25s)", short: "🇩🇪 女武神的骑行", dur: 25 },
+    { id: "1812_cannon",  file: "./assets/audio/1812_cannon.mp3",  label: "🇷🇺 俄 · 1812礼炮终章 (26s)", short: "🇷🇺 1812礼炮终章", dur: 26 },
+    { id: "william_tell", file: "./assets/audio/william_tell.mp3", label: "🇮🇹 意 · 威廉退尔冲锋 (25s)", short: "🇮🇹 威廉退尔冲锋", dur: 25 },
+    { id: "toreador",     file: "./assets/audio/toreador.mp3",     label: "🇫🇷 法 · 卡门斗牛士 (26s)",   short: "🇫🇷 卡门斗牛士",   dur: 26 },
+    { id: "mars_war",     file: "./assets/audio/mars_war.mp3",     label: "🇬🇧 英 · 火星战争使者 (24s)", short: "🇬🇧 火星战争使者", dur: 24 },
+  ];
+
+  function readSavedVolume() {
+    try {
+      const raw = localStorage.getItem("danclub_war_vol");
+      if (raw === null || raw.trim() === "") return 0.75;
+      const n = Number(raw);
+      return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0.75;
+    } catch {
+      return 0.75;
+    }
+  }
+
   const war = {
     data: null,
     activeCoin: "BTC",
@@ -14,6 +34,14 @@
     filterSide: "ALL",
     search: "",
     soundOn: false,
+    volume: readSavedVolume(),
+    trackIdx: Math.floor(Math.random() * WAR_TRACKS.length),
+    bgm: null,
+    playSeq: 0,
+    audioErrCount: 0,
+    needsAudioReload: false,
+    pausedByHidden: false,
+    lastSfxTs: 0,
     audioCtx: null,
     wsHL: null,
     wsBN: null,
@@ -81,50 +109,200 @@
     return `${mm}-${dd} ${hh}:${mi}`;
   };
 
-  /* ---------- Procedural Web Audio Tactical Synth (Zero Audio Files, Default Muted) ---------- */
+  /* ---------- 5-Nation War Anthem Radio + Procedural Combat SFX ---------- */
+  function ensureAudioElement() {
+    if (war.bgm) return war.bgm;
+    const el = new Audio();
+    el.preload = "none";
+    el.volume = war.volume;
+    el.addEventListener("ended", () => {
+      if (!war.soundOn || !war.running || document.hidden) return;
+      war.audioErrCount = 0;
+      war.trackIdx = (war.trackIdx + 1) % WAR_TRACKS.length;
+      playCurrentAnthem(true);
+    });
+    el.addEventListener("error", () => {
+      if (!war.soundOn || !war.running || document.hidden || war.pausedByHidden) return;
+      if (war.audioErrCount < 1) {
+        war.audioErrCount += 1;
+        war.trackIdx = (war.trackIdx + 1) % WAR_TRACKS.length;
+        playCurrentAnthem(true);
+      } else {
+        war.soundOn = false;
+        syncAudioUi("战歌音频加载失败，请检查网络后重试");
+      }
+    });
+    war.bgm = el;
+    return el;
+  }
+
+  function syncAudioUi(customStatus = null) {
+    const btn = $("btn-war-sound");
+    const sel = $("war-track-select");
+    const prompt = $("war-audio-prompt");
+    const status = $("war-audio-status");
+    const volSlider = $("war-vol");
+    const track = WAR_TRACKS[war.trackIdx] || WAR_TRACKS[0];
+
+    if (sel && Number(sel.value) !== war.trackIdx) {
+      sel.value = String(war.trackIdx);
+    }
+    if (volSlider && Math.round(war.volume * 100) !== Number(volSlider.value)) {
+      volSlider.value = String(Math.round(war.volume * 100));
+    }
+    if (btn) {
+      btn.textContent = war.soundOn ? "🔊 战歌激燃中" : "⚔️ 开启战歌";
+      btn.classList.toggle("active", war.soundOn);
+    }
+    if (prompt) {
+      prompt.classList.toggle("hidden", war.soundOn);
+    }
+    if (status) {
+      if (customStatus) {
+        status.textContent = customStatus;
+      } else if (war.soundOn) {
+        status.textContent = `正在轮播 [${war.trackIdx + 1}/${WAR_TRACKS.length}] ${track.short} · 高潮 ${track.dur}s`;
+      } else {
+        status.textContent = "5 首多国交响战歌高潮待命 · 自动轮播";
+      }
+    }
+  }
+
+  function playCurrentAnthem(forceReload = false) {
+    const el = ensureAudioElement();
+    const track = WAR_TRACKS[war.trackIdx] || WAR_TRACKS[0];
+    const seq = ++war.playSeq;
+    el.volume = war.volume;
+
+    if (forceReload || war.needsAudioReload || el.error || el.dataset.trackId !== track.id) {
+      war.needsAudioReload = false;
+      el.dataset.trackId = track.id;
+      el.src = track.file;
+      el.load();
+      el.currentTime = 0;
+    }
+
+    war.soundOn = true;
+    war.pausedByHidden = false;
+    syncAudioUi();
+
+    try {
+      if (!war.audioCtx) {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (AC) war.audioCtx = new AC();
+      }
+      if (war.audioCtx && war.audioCtx.state === "suspended") {
+        war.audioCtx.resume().catch(() => {});
+      }
+    } catch {}
+
+    const p = el.play();
+    if (p && typeof p.catch === "function") {
+      p.catch((err) => {
+        if (war.playSeq !== seq) return;
+        war.soundOn = false;
+        const blocked = err && err.name === "NotAllowedError";
+        if (!blocked) war.needsAudioReload = true;
+        syncAudioUi(blocked ? "浏览器限制自动播放，请点击「开启战歌」解锁" : "战歌加载受阻，请点击「开启战歌」重试");
+      });
+    }
+  }
+
+  function stopAnthem(keepPreference = false) {
+    war.playSeq += 1;
+    if (war.bgm) {
+      try {
+        war.bgm.pause();
+      } catch {}
+    }
+    if (war.audioCtx && war.audioCtx.state !== "closed") {
+      try {
+        war.audioCtx.suspend().catch(() => {});
+      } catch {}
+    }
+    if (!keepPreference) {
+      war.soundOn = false;
+      war.pausedByHidden = false;
+      syncAudioUi();
+    } else if (war.soundOn) {
+      war.pausedByHidden = true;
+    }
+  }
+
+  function nextTrack(autoStart = true) {
+    war.audioErrCount = 0;
+    war.trackIdx = (war.trackIdx + 1) % WAR_TRACKS.length;
+    if (autoStart || war.soundOn) {
+      playCurrentAnthem(true);
+    } else {
+      syncAudioUi();
+    }
+  }
+
   function playTacticalTone(side, tier) {
-    if (!war.soundOn) return;
+    if (!war.soundOn || !war.running || document.hidden || war.pausedByHidden || war.volume <= 0.01) return;
+    const nowMs = performance.now();
+    if (tier < 4 && nowMs - war.lastSfxTs < 170) return;
+    war.lastSfxTs = nowMs;
     try {
       if (!war.audioCtx) {
         const AC = window.AudioContext || window.webkitAudioContext;
         if (!AC) return;
         war.audioCtx = new AC();
       }
-      if (war.audioCtx.state === "suspended") war.audioCtx.resume();
+      if (war.audioCtx.state !== "running") {
+        war.audioCtx.resume().catch(() => {});
+        return;
+      }
       const ctx = war.audioCtx;
       const now = ctx.currentTime;
+      const scale = war.volume * 0.55;
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
 
       if (tier >= 4) {
+        // Heavy B-2 Strategic Bomber sub-bass horn + drop
         osc.type = "sawtooth";
-        const f0 = side === "LONG" ? 190 : 120;
+        const f0 = side === "LONG" ? 220 : 140;
         osc.frequency.setValueAtTime(f0, now);
-        osc.frequency.exponentialRampToValueAtTime(52, now + 0.34);
-        gain.gain.setValueAtTime(0.08, now);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.36);
+        osc.frequency.exponentialRampToValueAtTime(48, now + 0.38);
+        gain.gain.setValueAtTime(0.14 * scale, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.42);
         osc.connect(gain).connect(ctx.destination);
         osc.start(now);
-        osc.stop(now + 0.37);
+        osc.stop(now + 0.43);
       } else if (tier === 3) {
+        // Heavy twin-engine strike chirp
         osc.type = "triangle";
-        const f0 = side === "LONG" ? 560 : 340;
+        const f0 = side === "LONG" ? 640 : 390;
         osc.frequency.setValueAtTime(f0, now);
-        osc.frequency.exponentialRampToValueAtTime(f0 * 0.65, now + 0.14);
-        gain.gain.setValueAtTime(0.045, now);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+        osc.frequency.exponentialRampToValueAtTime(f0 * 0.58, now + 0.16);
+        gain.gain.setValueAtTime(0.08 * scale, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.17);
         osc.connect(gain).connect(ctx.destination);
         osc.start(now);
-        osc.stop(now + 0.16);
+        osc.stop(now + 0.18);
       } else if (tier === 2) {
+        // Light fighter laser sweep
         osc.type = "sine";
-        const f0 = side === "LONG" ? 740 : 480;
+        const f0 = side === "LONG" ? 860 : 520;
         osc.frequency.setValueAtTime(f0, now);
-        gain.gain.setValueAtTime(0.02, now);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.06);
+        osc.frequency.exponentialRampToValueAtTime(f0 * 0.72, now + 0.08);
+        gain.gain.setValueAtTime(0.045 * scale, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
         osc.connect(gain).connect(ctx.destination);
         osc.start(now);
-        osc.stop(now + 0.065);
+        osc.stop(now + 0.095);
+      } else {
+        // Subtle kinetic tracer ping for active dogfight cadence
+        osc.type = "sine";
+        const f0 = side === "LONG" ? 1080 : 720;
+        osc.frequency.setValueAtTime(f0, now);
+        gain.gain.setValueAtTime(0.018 * scale, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.045);
+        osc.connect(gain).connect(ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.05);
       }
     } catch {
       // Ignore audio permission failures gracefully
@@ -224,7 +402,7 @@
       alive: true,
     });
 
-    if (tier >= 2) playTacticalTone(side, tier);
+    if (tier >= 2 || usd >= 10_000) playTacticalTone(side, tier);
 
     if (tier === 4) {
       war.shakeAmt = 9;
@@ -1229,6 +1407,9 @@
       war.lastFrameTs = performance.now();
       war.rafId = requestAnimationFrame(tick);
       connectSockets();
+      if (war.soundOn && war.pausedByHidden && !document.hidden) {
+        playCurrentAnthem(false);
+      }
     }
   }
 
@@ -1237,6 +1418,7 @@
     if (war.rafId) cancelAnimationFrame(war.rafId);
     war.rafId = null;
     disconnectSockets();
+    stopAnthem(true);
   }
 
   function bindWarEvents() {
@@ -1292,10 +1474,48 @@
       renderFleetTable();
     });
 
+    syncAudioUi();
+
     $("btn-war-sound")?.addEventListener("click", () => {
-      war.soundOn = !war.soundOn;
-      $("btn-war-sound").textContent = war.soundOn ? "音效 开" : "音效 关";
-      $("btn-war-sound").classList.toggle("btn-accent-ghost", war.soundOn);
+      if (war.soundOn) {
+        stopAnthem(false);
+      } else {
+        war.audioErrCount = 0;
+        playCurrentAnthem(false);
+      }
+    });
+
+    $("war-audio-prompt")?.addEventListener("click", () => {
+      war.audioErrCount = 0;
+      playCurrentAnthem(false);
+    });
+
+    $("war-track-select")?.addEventListener("change", (e) => {
+      const idx = Number(e.target.value);
+      if (!Number.isInteger(idx) || idx < 0 || idx >= WAR_TRACKS.length) return;
+      war.audioErrCount = 0;
+      war.trackIdx = idx;
+      playCurrentAnthem(true);
+    });
+
+    $("btn-war-next-track")?.addEventListener("click", () => nextTrack(true));
+
+    $("war-vol")?.addEventListener("input", (e) => {
+      const pct = Number(e.target.value);
+      if (!Number.isFinite(pct)) return;
+      war.volume = Math.max(0, Math.min(1, pct / 100));
+      if (war.bgm) war.bgm.volume = war.volume;
+      try {
+        localStorage.setItem("danclub_war_vol", String(war.volume));
+      } catch {}
+    });
+
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) {
+        if (war.soundOn) stopAnthem(true);
+      } else if (war.running && war.soundOn && war.pausedByHidden) {
+        playCurrentAnthem(false);
+      }
     });
 
     $("btn-war-poster")?.addEventListener("click", exportBattlePoster);

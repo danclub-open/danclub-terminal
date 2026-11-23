@@ -57,6 +57,11 @@ WHITELISTED_STATIC_FILES: tuple[str, ...] = (
     "assets/style.css",
     "assets/app.js",
     "assets/war_arena.js",
+    "assets/audio/valkyries.mp3",
+    "assets/audio/1812_cannon.mp3",
+    "assets/audio/william_tell.mp3",
+    "assets/audio/toreador.mp3",
+    "assets/audio/mars_war.mp3",
 )
 ALLOWED_API_FILENAMES: frozenset[str] = frozenset(
     {"index.json", "overview.json", "arb.json", "flows.json", "labs.json", "feed.json", "whales.json"}
@@ -453,25 +458,25 @@ def publish_static_ssh(
     # Remote script rejects symlinks on target paths, verifies SHA-256 of EVERY extracted file, then installs cleanly
     q_dir = shlex.quote(remote_dir)
     q_parent = shlex.quote(str(Path(remote_dir).parent))
+    static_rel_list = " ".join(shlex.quote(rel) for rel in WHITELISTED_STATIC_FILES)
+    non_index_rel_list = " ".join(shlex.quote(rel) for rel in WHITELISTED_STATIC_FILES if rel != "index.html")
     remote_cmd = (
         f"set -eu; "
         f"test ! -L {q_parent}; "
         f"if [ -e {q_dir} ]; then test -d {q_dir} && test ! -L {q_dir}; else mkdir -p {q_dir}; fi; "
-        f"for sub in assets api api/v1; do "
+        f"for sub in assets assets/audio api api/v1; do "
         f"  if [ -e {q_dir}/\"$sub\" ]; then test -d {q_dir}/\"$sub\" && test ! -L {q_dir}/\"$sub\"; else mkdir -p {q_dir}/\"$sub\"; fi; "
         f"done; "
         f"tmp=$(mktemp -d {q_dir}/.stage.XXXXXX); "
         f"trap 'rm -rf \"$tmp\"' EXIT; "
         f"tar -xzf - --no-same-owner --no-same-permissions -C \"$tmp\"; "
         f"(cd \"$tmp\" && sha256sum -c .manifest.sha256 >/dev/null); "
-        f"chmod 0644 \"$tmp/index.html\" \"$tmp/assets/\"* \"$tmp/api/v1/\"*; "
-        f"for rel in index.html assets/style.css assets/app.js assets/war_arena.js; do test ! -L {q_dir}/\"$rel\"; done; "
-        f"for f in \"$tmp/api/v1/\"*.json; do test ! -L {q_dir}/api/v1/\"$(basename \"$f\")\"; done; "
-        f"mv -f \"$tmp/assets/style.css\" {q_dir}/assets/style.css; "
-        f"mv -f \"$tmp/assets/app.js\" {q_dir}/assets/app.js; "
-        f"mv -f \"$tmp/assets/war_arena.js\" {q_dir}/assets/war_arena.js; "
-        f"for f in \"$tmp/api/v1/\"*.json; do mv -f \"$f\" {q_dir}/api/v1/\"$(basename \"$f\")\"; done; "
-        f"mv -f \"$tmp/index.html\" {q_dir}/index.html"
+        f"find \"$tmp\" -type f -exec chmod 0644 {{}} +; "
+        f"for rel in {static_rel_list}; do test ! -L {q_dir}/\"$rel\" && test ! -d {q_dir}/\"$rel\"; done; "
+        f"for f in \"$tmp/api/v1/\"*.json; do bn=$(basename \"$f\"); test ! -L {q_dir}/api/v1/\"$bn\" && test ! -d {q_dir}/api/v1/\"$bn\"; done; "
+        f"for rel in {non_index_rel_list}; do mv -fT -- \"$tmp/$rel\" {q_dir}/\"$rel\"; done; "
+        f"for f in \"$tmp/api/v1/\"*.json; do mv -fT -- \"$f\" {q_dir}/api/v1/\"$(basename \"$f\")\"; done; "
+        f"mv -fT -- \"$tmp/index.html\" {q_dir}/index.html"
     )
     proc = subprocess.Popen(
         ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host, remote_cmd],
@@ -480,7 +485,7 @@ def publish_static_ssh(
         stderr=subprocess.PIPE,
     )
     try:
-        _, err_b = proc.communicate(input=tar_bytes, timeout=45)
+        _, err_b = proc.communicate(input=tar_bytes, timeout=60)
     except subprocess.TimeoutExpired:
         proc.kill()
         proc.communicate()

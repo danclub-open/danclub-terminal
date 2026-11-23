@@ -77,8 +77,8 @@
 
       <div class="container nav-shell">
         <nav class="nav-tabs" aria-label="终端频道导航">
-          <button class="nav-tab active" data-tab="overview" type="button">总览</button>
-          <button class="nav-tab" data-tab="war" type="button">多空战情室 · 巨鲸</button>
+          <button class="nav-tab active" data-tab="war" type="button">多空战情室 · 巨鲸</button>
+          <button class="nav-tab" data-tab="overview" type="button">总览</button>
           <button class="nav-tab" data-tab="arb" type="button">跨市场套利</button>
           <button class="nav-tab" data-tab="flows" type="button">资金流与杠杆</button>
           <button class="nav-tab" data-tab="labs" type="button">模拟盘与活动</button>
@@ -89,8 +89,8 @@
     </header>
 
     <main class="container main-shell">
-      <!-- TAB 1: OVERVIEW -->
-      <section class="tab-panel active" id="tab-overview">
+      <!-- TAB 2: OVERVIEW -->
+      <section class="tab-panel" id="tab-overview">
         <!-- 5-Second Trader Decision Layer: Market Regime + High-Priority Desk Radar -->
         <article class="card regime-card" id="regime-card">
           <div class="regime-top">
@@ -212,8 +212,8 @@
         </div>
       </section>
 
-      <!-- TAB 2: TACTICAL AIR-BATTLE WAR ROOM & WHALE RADAR -->
-      <section class="tab-panel" id="tab-war">
+      <!-- TAB 1: TACTICAL AIR-BATTLE WAR ROOM & WHALE RADAR -->
+      <section class="tab-panel active" id="tab-war">
         <article class="card war-arena-card" id="war-arena-card">
           <div class="card-head wrap-head">
             <div>
@@ -227,10 +227,27 @@
                 <button class="seg-btn" data-coin="SOL" type="button">SOL</button>
                 <button class="seg-btn" data-coin="HYPE" type="button">HYPE</button>
               </div>
-              <button class="btn btn-compact" id="btn-war-sound" type="button">音效 关</button>
               <button class="btn btn-compact" id="btn-war-poster" type="button">导出战报图</button>
               <button class="btn btn-compact btn-accent-ghost" id="btn-war-fullscreen" type="button">副屏全屏</button>
             </div>
+          </div>
+
+          <!-- 5-Nation Climax War Anthem & Combat Audio Deck -->
+          <div class="war-audio-bar" id="war-audio-bar">
+            <button class="btn btn-compact btn-war-audio" id="btn-war-sound" type="button">⚔️ 开启战歌</button>
+            <select class="war-track-select" id="war-track-select" aria-label="选择多国战歌高潮">
+              <option value="0">🇩🇪 德 · 女武神的骑行 (25s)</option>
+              <option value="1">🇷🇺 俄 · 1812礼炮终章 (26s)</option>
+              <option value="2">🇮🇹 意 · 威廉退尔冲锋 (25s)</option>
+              <option value="3">🇫🇷 法 · 卡门斗牛士 (26s)</option>
+              <option value="4">🇬🇧 英 · 火星战争使者 (24s)</option>
+            </select>
+            <button class="btn btn-compact" id="btn-war-next-track" type="button" title="切换下一首高潮战歌">切歌 ⏭</button>
+            <label class="war-vol-wrap" title="调节战歌与空战音效音量">
+              <span class="muted small">音量</span>
+              <input class="war-vol-slider" id="war-vol" type="range" min="0" max="100" value="75" aria-label="战歌音量" />
+            </label>
+            <span class="war-now-playing mono small muted" id="war-audio-status">5 首多国交响战歌高潮待命 · 自动轮播</span>
           </div>
 
           <!-- Battle Power Bar -->
@@ -251,6 +268,9 @@
           <!-- 60fps HiDPI Tactical Air-Combat Canvas -->
           <div class="war-canvas-wrap">
             <canvas id="war-canvas"></canvas>
+            <button class="war-audio-prompt" id="war-audio-prompt" type="button">
+              ▶ 点击燃起五国战歌高潮 &amp; 空战音效（5 首 24–26s 轮播）
+            </button>
             <div class="chart-tooltip" id="war-canvas-tip"></div>
           </div>
 
@@ -645,6 +665,10 @@
                 <li><strong>Fail-Closed 隐私防火墙</strong>：发布前递归扫描每一个键名与字段，命中邮箱、手机号、私钥/Token、内网地址或私有黑名单即熔断中止发布。</li>
                 <li><strong>单向静态分发</strong>：公网与 API 调用方仅访问只读静态边缘节点，源数据节点永不直接暴露。</li>
               </ol>
+              <h3>战歌音频公版授权鸣谢</h3>
+              <p class="small muted">
+                战情室 5 首多国交响战歌高潮片段均取材自 Wikimedia Commons 公开授权录音：柴可夫斯基《1812 序曲》与罗西尼《威廉·退尔序曲》（美国海军陆战队乐团，Public Domain）、比才《卡门·斗牛士之歌》（美国空军乐团合唱团，Public Domain）、瓦格纳《女武神的骑行》（Philip Milman，CC BY 3.0）、霍尔斯特《火星：战争使者》（Skidmore College Orchestra / Musopen，Attribution）。
+              </p>
               <p class="mt-12">
                 <a
                   class="btn btn-primary"

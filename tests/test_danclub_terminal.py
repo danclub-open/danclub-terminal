@@ -318,11 +318,21 @@ class TestExporterIntegrityAndHygiene(unittest.TestCase):
             api_bytes = syncer.build_verified_api_bytes(bundle, blocklist_path=Path("/nonexistent"))
             release = syncer.build_verified_release_bundle(ROOT / "site", api_bytes)
 
-            # Verify automatic content-hash ?v= injected into staged index.html!
+            # Verify automatic content-hash ?v= injected into staged index.html & war room is Tab #1
             html = release["index.html"].decode("utf-8")
             self.assertRegex(html, r"\./assets/style\.css\?v=[0-9a-f]{10}")
             self.assertRegex(html, r"\./assets/app\.js\?v=[0-9a-f]{10}")
             self.assertRegex(html, r"\./assets/war_arena\.js\?v=[0-9a-f]{10}")
+            self.assertLess(html.index('data-tab="war"'), html.index('data-tab="overview"'))
+            for audio_rel in (
+                "assets/audio/valkyries.mp3",
+                "assets/audio/1812_cannon.mp3",
+                "assets/audio/william_tell.mp3",
+                "assets/audio/toreador.mp3",
+                "assets/audio/mars_war.mp3",
+            ):
+                self.assertIn(audio_rel, release)
+                self.assertGreater(len(release[audio_rel]), 100_000)
 
             # Verify tar contains ONLY expected regular 0644 files
             tar_raw = syncer.build_static_tar_bytes(release)
@@ -530,6 +540,12 @@ class TestExporterIntegrityAndHygiene(unittest.TestCase):
         self.assertIn("${xSvg}", js)
         self.assertIn("flowBuckets", war_js)
         self.assertNotIn("trades60s", war_js)
+        # Regressions from Codex Redteam: null localStorage MUST default to 0.75 (not Number(null)===0) & safe try/catch
+        self.assertIn("function readSavedVolume()", war_js)
+        self.assertIn("raw === null", war_js)
+        self.assertIn("if (!war.soundOn || !war.running || document.hidden || war.pausedByHidden", war_js)
+        self.assertIn("el.load()", war_js)
+        self.assertIn("safeStoreGet", js)
 
 
 if __name__ == "__main__":

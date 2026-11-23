@@ -1439,6 +1439,104 @@ a:hover {
   flex-wrap: wrap;
 }
 
+/* 5-Nation War Anthem Audio Deck */
+.war-audio-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 11px;
+  margin-bottom: 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+}
+
+.btn-war-audio {
+  border-color: rgba(245, 158, 11, 0.42);
+  background: rgba(245, 158, 11, 0.12);
+  color: var(--warn);
+  font-weight: 700;
+}
+
+.btn-war-audio:hover {
+  background: rgba(245, 158, 11, 0.2);
+  border-color: var(--warn);
+}
+
+.btn-war-audio.active {
+  border-color: rgba(16, 185, 129, 0.55);
+  background: rgba(16, 185, 129, 0.16);
+  color: var(--ok);
+  box-shadow: 0 0 12px rgba(16, 185, 129, 0.2);
+}
+
+.war-track-select {
+  height: 29px;
+  padding: 0 9px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.war-vol-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.war-vol-slider {
+  width: 74px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.war-now-playing {
+  margin-left: auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.war-audio-prompt {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  z-index: 6;
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(245, 158, 11, 0.6);
+  background: rgba(7, 10, 16, 0.86);
+  backdrop-filter: blur(6px);
+  color: #fde68a;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  max-width: calc(100% - 20px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(245, 158, 11, 0.18);
+  transition: transform 0.15s ease, background 0.15s ease, opacity 0.2s ease;
+}
+
+.war-audio-prompt:hover {
+  background: rgba(245, 158, 11, 0.22);
+  color: #ffffff;
+  transform: translateX(-50%) translateY(-1px);
+}
+
+.war-audio-prompt.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
 .war-power-head {
   display: flex;
   justify-content: space-between;
@@ -1707,6 +1805,9 @@ a:hover {
   .api-desc { white-space: normal; }
   .hide-sm { display: none; }
   .data-table th, .data-table td { padding: 7px 6px; font-size: 12px; }
+  .war-now-playing { flex-basis: 100%; margin-left: 0; }
+  .war-track-select { max-width: 100%; }
+  .war-audio-prompt { font-size: 11px; padding: 6px 11px; }
 }
 
 @media (max-width: 440px) {

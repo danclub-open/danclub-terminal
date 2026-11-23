@@ -9,7 +9,7 @@
     flows: null,
     labs: null,
     feed: null,
-    activeTab: "overview",
+    activeTab: "war",
     activeMacroGroup: "ALL",
     activeSpreadPair: "SKHY_VS_SKHYNIX",
     activeSpreadRange: "24h",
@@ -114,23 +114,30 @@
     getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
 
   /* ---------- Theme, Color Mode & Tab Routing ---------- */
+  const safeStoreGet = (k) => {
+    try { return localStorage.getItem(k); } catch { return null; }
+  };
+  const safeStoreSet = (k, v) => {
+    try { localStorage.setItem(k, v); } catch {}
+  };
+
   function initPreferences() {
-    const savedTheme = localStorage.getItem("danclub_theme_v2");
+    const savedTheme = safeStoreGet("danclub_theme_v2");
     applyTheme(savedTheme === "light" ? "light" : "dark");
 
-    const savedColor = localStorage.getItem("danclub_color_mode");
+    const savedColor = safeStoreGet("danclub_color_mode");
     applyColorMode(savedColor === "cn" ? "cn" : "intl");
 
     $("btn-theme")?.addEventListener("click", () => {
       const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
-      localStorage.setItem("danclub_theme_v2", next);
+      safeStoreSet("danclub_theme_v2", next);
       applyTheme(next);
       rerenderActiveCharts();
     });
 
     $("btn-color-mode")?.addEventListener("click", () => {
       const next = document.documentElement.dataset.colorMode === "cn" ? "intl" : "cn";
-      localStorage.setItem("danclub_color_mode", next);
+      safeStoreSet("danclub_color_mode", next);
       applyColorMode(next);
       rerenderActiveCharts();
     });
@@ -149,8 +156,8 @@
   }
 
   function switchTab(tab, focusElId = null) {
-    const valid = ["overview", "war", "arb", "flows", "labs", "feed", "open"];
-    if (!valid.includes(tab)) tab = "overview";
+    const valid = ["war", "overview", "arb", "flows", "labs", "feed", "open"];
+    if (!valid.includes(tab)) tab = "war";
     state.activeTab = tab;
     document.querySelectorAll(".nav-tab").forEach((btn) => {
       btn.classList.toggle("active", btn.dataset.tab === tab);
@@ -185,7 +192,7 @@
       e.preventDefault();
       switchTab("open");
     });
-    const initial = (window.location.hash || "#overview").slice(1);
+    const initial = (window.location.hash || "#war").slice(1);
     switchTab(initial);
   }
 
