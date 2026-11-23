@@ -1287,7 +1287,8 @@ a:hover {
   color: var(--muted);
 }
 
-.btn-toggle-active {
+.btn.btn-toggle-active,
+.btn.btn-toggle-active:hover {
   border-color: var(--accent-border);
   color: var(--accent);
   background: var(--accent-soft);
@@ -1338,15 +1339,18 @@ a:hover {
 
 .feed-list {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
 }
 
 .feed-item {
+  min-width: 0;
   padding: 11px 13px;
   border-radius: var(--radius-sm);
   background: var(--surface-2);
   border: 1px solid var(--line);
   border-left: 3px solid var(--line-strong);
+  overflow-wrap: anywhere;
 }
 
 .feed-item.tone-bearish { border-left-color: var(--risk); }
@@ -1368,6 +1372,7 @@ a:hover {
   font-weight: 650;
   color: var(--text);
   line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .feed-foot {
@@ -1379,6 +1384,11 @@ a:hover {
   font-size: 11.5px;
 }
 
+.feed-foot .pill {
+  white-space: normal;
+  max-width: 100%;
+}
+
 .feed-ref {
   font-family: var(--mono);
   font-size: 11px;
@@ -1387,6 +1397,8 @@ a:hover {
   border-radius: 4px;
   background: var(--surface);
   border: 1px solid var(--line);
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 /* Open API */
