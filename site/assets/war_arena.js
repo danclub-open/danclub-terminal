@@ -14,15 +14,59 @@
     { id: "mars_war",     file: "./assets/audio/mars_war.mp3",     label: "🇬🇧 英 · 火星战争使者 (24s)", short: "🇬🇧 火星战争使者", dur: 24 },
   ];
 
-  function readSavedVolume() {
+  function safeStoreGet(key, fallback = null) {
     try {
-      const raw = localStorage.getItem("danclub_war_vol");
-      if (raw === null || raw.trim() === "") return 0.75;
-      const n = Number(raw);
-      return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0.75;
+      const v = localStorage.getItem(key);
+      return v === null ? fallback : v;
     } catch {
-      return 0.75;
+      return fallback;
     }
+  }
+
+  function safeStoreSet(key, val) {
+    try {
+      localStorage.setItem(key, String(val));
+    } catch {}
+  }
+
+  function readSavedVolume() {
+    const raw = safeStoreGet("danclub_war_vol", null);
+    if (raw === null || raw.trim() === "") return 0.75;
+    const n = Number(raw);
+    return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0.75;
+  }
+
+  function readSavedLikedIds() {
+    const raw = safeStoreGet("danclub_barrage_liked", "");
+    if (!raw) return new Set();
+    try {
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr)) {
+        const clean = arr.map((x) => Number(x)).filter((n) => Number.isInteger(n) && n > 0).slice(-200);
+        return new Set(clean);
+      }
+    } catch {}
+    return new Set();
+  }
+
+  function addBoundedSet(setObj, val, maxSize) {
+    if (setObj.has(val)) {
+      setObj.delete(val);
+    }
+    setObj.add(val);
+    while (setObj.size > maxSize) {
+      const oldest = setObj.values().next().value;
+      setObj.delete(oldest);
+    }
+  }
+
+  function getBarrageApiBase() {
+    if (typeof window.__DANCLUB_BARRAGE_API__ === "string" && window.__DANCLUB_BARRAGE_API__) {
+      return window.__DANCLUB_BARRAGE_API__.replace(/\/+$/, "");
+    }
+    const host = (window.location && window.location.hostname) || "";
+    if (host === "danclub.duckdns.org") return "/api/v1/barrage";
+    return "https://danclub.duckdns.org/api/v1/barrage";
   }
 
   const war = {
@@ -79,6 +123,32 @@
     lastFrameTs: 0,
     lastHudTs: 0,
     ambientTimer: 0,
+    danmakuOn: safeStoreGet("danclub_war_danmaku", "1") !== "0",
+    danmakuActive: [],
+    danmakuQueue: [],
+    dmSpawnCooldown: 0,
+  };
+
+  const barrage = {
+    initialized: false,
+    online: false,
+    pollTimer: null,
+    pollInFlight: false,
+    pollAbortCtrl: null,
+    pollSeq: 0,
+    pollCursor: 0,
+    items: [],
+    seenIds: new Set(),
+    selfIds: new Set(),
+    likedIds: readSavedLikedIds(),
+    likingIds: new Set(),
+    stats24h: { total: 0, long: 0, short: 0, neutral: 0, long_pct: 50, short_pct: 50 },
+    composeSide: "LONG",
+    filterSide: "ALL",
+    cooldownUntil: 0,
+    cooldownTimer: null,
+    feedbackTimer: null,
+    localSeq: -1,
   };
 
   /* ---------- Utilities ---------- */
@@ -193,6 +263,9 @@
     war.autoUnlockArmed = true;
     _gestureUnlockHandler = (ev) => {
       const t = ev.target;
+      if (ev.type === "keydown" && t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) {
+        return;
+      }
       if (t && typeof t.closest === "function" && t.closest("#btn-war-sound, #war-audio-prompt, #war-local-file, .war-local-btn, #war-track-select, #btn-war-next-track")) {
         disarmGestureUnlock();
         return;
@@ -1285,6 +1358,9 @@
     }
     war.floatingHits = nextHits;
 
+    // 5c. Live Flying Danmaku in Upper & Lower Sky Lanes (center combat zone stays 100% clear)
+    updateAndDrawDanmaku(ctx, W, H, dt);
+
     // 6. Tier 4 Strategic Bomber Tactical Sky-Alert Banner
     if (war.bannerAlpha > 0.02 && war.bannerText) {
       const bCol = war.bannerSide === "LONG" ? "#10b981" : "#f43f5e";
@@ -1738,6 +1814,629 @@
     $("whale-drawer-backdrop")?.classList.remove("open");
   }
 
+  /* ---------- Live Sky-Lane Danmaku Engine & Frontline Message Wall ---------- */
+  function syncDanmakuToggleUi() {
+    const btn = $("btn-war-danmaku");
+    if (!btn) return;
+    btn.textContent = war.danmakuOn ? "弹幕 开" : "弹幕 关";
+    btn.classList.toggle("active", war.danmakuOn);
+    btn.title = war.danmakuOn ? "点击隐藏战场飞屏弹幕" : "点击开启战场飞屏弹幕";
+  }
+
+  function showBarrageFeedback(msg, kind = "ok", ttlMs = 3600) {
+    const el = $("dm-feedback");
+    if (!el) return;
+    if (barrage.feedbackTimer) clearTimeout(barrage.feedbackTimer);
+    if (!msg) {
+      el.textContent = "";
+      el.className = "dm-feedback small";
+      return;
+    }
+    el.textContent = msg;
+    el.className = `dm-feedback small is-${kind}`;
+    if (ttlMs > 0) {
+      barrage.feedbackTimer = setTimeout(() => {
+        el.textContent = "";
+        el.className = "dm-feedback small";
+      }, ttlMs);
+    }
+  }
+
+  function fmtBarrageTime(ts) {
+    const n = Number(ts);
+    if (!Number.isFinite(n) || n <= 0) return "刚刚";
+    const diff = Math.floor(Date.now() / 1000) - n;
+    if (diff < 45) return "刚刚";
+    if (diff < 3600) return `${Math.max(1, Math.floor(diff / 60))}分钟前`;
+    const d = new Date(n * 1000);
+    const now = new Date();
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mi = String(d.getMinutes()).padStart(2, "0");
+    if (d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()) {
+      return `${hh}:${mi}`;
+    }
+    return `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${hh}:${mi}`;
+  }
+
+  function enqueueDanmaku(item, isSelf = false) {
+    if (!item || !item.text) return;
+    if (!war.danmakuOn && !isSelf) return;
+    const entry = {
+      id: Number(item.id) || 0,
+      side: item.side === "LONG" || item.side === "SHORT" ? item.side : "NEUTRAL",
+      nick: String(item.nick || "匿名战友").slice(0, 12),
+      text: String(item.text || ""),
+      isSelf: Boolean(isSelf),
+    };
+    if (isSelf) {
+      war.danmakuQueue.unshift(entry);
+      if (war.danmakuQueue.length > 28) war.danmakuQueue.pop();
+    } else {
+      if (war.danmakuQueue.length >= 24) war.danmakuQueue.shift();
+      war.danmakuQueue.push(entry);
+    }
+  }
+
+  function getDanmakuLanes(H) {
+    if (H < 310) {
+      return [20, Math.max(46, H - 20)];
+    }
+    return [21, 49, Math.max(96, H - 49), Math.max(124, H - 21)];
+  }
+
+  function updateAndDrawDanmaku(ctx, W, H, dt) {
+    if (!war.danmakuOn) {
+      if (war.danmakuActive.length) war.danmakuActive = [];
+      return;
+    }
+
+    const narrow = W < 520;
+    const lanes = getDanmakuLanes(H);
+    const font = `600 ${narrow ? 11 : 12}px -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", sans-serif`;
+    const tagFont = `700 ${narrow ? 9.5 : 10}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+
+    // Spawn queued danmaku into the least crowded upper/lower sky lane
+    war.dmSpawnCooldown = Math.max(0, war.dmSpawnCooldown - dt);
+    if (war.danmakuQueue.length > 0 && war.dmSpawnCooldown <= 0 && war.danmakuActive.length < 14) {
+      let bestLane = -1;
+      let bestRight = Infinity;
+      for (let i = 0; i < lanes.length; i++) {
+        let maxRight = -Infinity;
+        for (const d of war.danmakuActive) {
+          if (d.lane === i) {
+            const r = d.x + d.w;
+            if (r > maxRight) maxRight = r;
+          }
+        }
+        if (maxRight < W - 26 && maxRight < bestRight) {
+          bestRight = maxRight;
+          bestLane = i;
+        }
+      }
+      if (bestLane >= 0) {
+        const next = war.danmakuQueue.shift();
+        const maxChars = narrow ? 24 : 40;
+        const rawText = next.text.length > maxChars ? `${next.text.slice(0, maxChars - 1)}…` : next.text;
+        const showNick = next.nick && next.nick !== "匿名战友" ? `${next.nick}: ` : "";
+        const label = `${showNick}${rawText}`;
+        ctx.save();
+        ctx.font = font;
+        const textW = ctx.measureText(label).width;
+        ctx.restore();
+        const tagW = narrow ? 20 : 22;
+        const pillH = narrow ? 21 : 23;
+        const pillW = Math.ceil(tagW + textW + 20);
+        const speed = (narrow ? 68 : 82) + Math.min(28, pillW * 0.08) + (next.isSelf ? 8 : 0);
+        war.danmakuActive.push({
+          id: Number(next.id) || 0,
+          lane: bestLane,
+          y: lanes[bestLane],
+          x: W + 14,
+          w: pillW,
+          h: pillH,
+          tagW,
+          speed,
+          side: next.side,
+          label,
+          isSelf: next.isSelf,
+        });
+        war.dmSpawnCooldown = next.isSelf ? 0.22 : 0.48;
+      }
+    }
+
+    if (!war.danmakuActive.length) return;
+
+    const kept = [];
+    for (const d of war.danmakuActive) {
+      d.x -= d.speed * dt;
+      if (d.x + d.w < -20) continue;
+
+      // Clamp y smoothly if canvas resized
+      const laneY = lanes[Math.min(d.lane, lanes.length - 1)] || 22;
+      const topY = laneY - d.h / 2;
+      const sideCol = d.side === "LONG" ? "#10b981" : d.side === "SHORT" ? "#f43f5e" : "#38bdf8";
+      const tagTxt = d.side === "LONG" ? "多" : d.side === "SHORT" ? "空" : "观";
+
+      ctx.save();
+      ctx.globalAlpha = d.isSelf ? 0.96 : 0.88;
+      ctx.fillStyle = "rgba(8, 12, 20, 0.82)";
+      ctx.strokeStyle = d.isSelf ? "#f59e0b" : sideCol;
+      ctx.lineWidth = d.isSelf ? 1.6 : 1.0;
+      ctx.beginPath();
+      ctx.roundRect(d.x, topY, d.w, d.h, d.h / 2);
+      ctx.fill();
+      ctx.stroke();
+
+      // Camp micro badge
+      ctx.fillStyle = sideCol;
+      ctx.beginPath();
+      ctx.roundRect(d.x + 4, topY + 3.5, d.tagW - 2, d.h - 7, (d.h - 7) / 2);
+      ctx.fill();
+
+      ctx.font = tagFont;
+      ctx.fillStyle = "#061018";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(tagTxt, d.x + 4 + (d.tagW - 2) / 2, laneY + 0.5);
+
+      // Message text
+      ctx.font = font;
+      ctx.fillStyle = d.isSelf ? "#fef3c7" : "#f1f5f9";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      ctx.fillText(d.label, d.x + d.tagW + 8, laneY + 0.5);
+      ctx.restore();
+
+      kept.push(d);
+    }
+    war.danmakuActive = kept;
+  }
+
+  function renderBarragePulse() {
+    const st = barrage.stats24h || {};
+    const rawTotal = st.total;
+    const total =
+      rawTotal !== undefined && rawTotal !== null && Number.isFinite(Number(rawTotal))
+        ? Math.max(0, Math.floor(Number(rawTotal)))
+        : barrage.items.length;
+    const badge = $("dm-count-badge");
+    if (badge) badge.textContent = `${total} 条`;
+
+    const lPct = Number.isFinite(Number(st.long_pct)) ? Math.max(0, Math.min(100, Number(st.long_pct))) : 50;
+    const longInt = Math.round(lPct);
+    const shortInt = 100 - longInt;
+    const pLong = $("dm-pulse-long");
+    const pShort = $("dm-pulse-short");
+    const bLong = $("dm-pulse-bar-long");
+    const bShort = $("dm-pulse-bar-short");
+    if (pLong) pLong.textContent = `多 ${longInt}%`;
+    if (pShort) pShort.textContent = `空 ${shortInt}%`;
+    if (bLong) bLong.style.width = `${lPct}%`;
+    if (bShort) bShort.style.width = `${100 - lPct}%`;
+  }
+
+  function setBarrageSyncStatus(online, text) {
+    barrage.online = online;
+    const dot = $("dm-sync-dot");
+    const lbl = $("dm-sync-status");
+    if (dot) dot.classList.toggle("online", online);
+    if (lbl && text) lbl.textContent = text;
+  }
+
+  function renderBarrageWall() {
+    const list = $("dm-msg-list");
+    if (!list) return;
+    renderBarragePulse();
+
+    const filtered = barrage.items.filter((m) => {
+      if (barrage.filterSide === "ALL") return true;
+      return m.side === barrage.filterSide;
+    });
+
+    if (!filtered.length) {
+      const hint =
+        barrage.filterSide === "ALL"
+          ? "前线暂静默，选择多/空阵营发第一条弹幕占领制空权；全网实时同步。"
+          : `当前「${barrage.filterSide === "LONG" ? "多军" : "空军"}」暂无留言，来发第一条助威弹幕。`;
+      list.innerHTML = `
+        <div class="dm-pin">
+          <span class="dm-badge dm-badge-sys">战情广播</span>
+          <span>${esc(hint)}</span>
+        </div>
+      `;
+      return;
+    }
+
+    const html = filtered
+      .slice(0, 80)
+      .map((m) => {
+        const sideCls = m.side === "LONG" ? "is-long" : m.side === "SHORT" ? "is-short" : "is-neutral";
+        const badgeCls = m.side === "LONG" ? "dm-badge-long" : m.side === "SHORT" ? "dm-badge-short" : "dm-badge-neutral";
+        const badgeTxt = m.side === "LONG" ? "多" : m.side === "SHORT" ? "空" : "观";
+        const isSelf = barrage.selfIds.has(m.id);
+        const isLiked = barrage.likedIds.has(m.id);
+        const isLiking = barrage.likingIds.has(m.id);
+        const coinSafe = m.coin && m.coin !== "ALL" ? `<span class="dm-coin-tag">${esc(m.coin)}</span>` : "";
+        const likesNum = Math.max(0, Number(m.likes) || 0);
+        const likeBtn =
+          m.id > 0
+            ? `<button class="dm-like-btn${isLiked ? " liked" : ""}" type="button" data-action="like" data-id="${m.id}"${isLiking ? " disabled" : ""} title="点赞助威">▲ ${likesNum}</button>`
+            : "";
+        return `
+          <div class="dm-item ${sideCls}${isSelf ? " is-self" : ""}">
+            <div class="dm-item-meta">
+              <span class="dm-badge ${badgeCls}">${badgeTxt}</span>
+              ${coinSafe}
+              <span class="dm-nick">${esc(m.nick || "匿名战友")}</span>
+              <span class="dm-ts">${esc(fmtBarrageTime(m.ts))}</span>
+              ${likeBtn}
+            </div>
+            <div class="dm-item-text" data-action="replay" data-id="${m.id}" title="点击重放该条弹幕">${esc(m.text)}</div>
+          </div>
+        `;
+      })
+      .join("");
+    list.innerHTML = html;
+  }
+
+  function normalizeBarrageItem(raw) {
+    const id = Number(raw?.id);
+    if (!Number.isInteger(id)) return null;
+    return {
+      id,
+      ts: Number(raw.ts) || Math.floor(Date.now() / 1000),
+      coin: String(raw.coin || "BTC"),
+      side: raw.side === "LONG" || raw.side === "SHORT" ? raw.side : "NEUTRAL",
+      nick: String(raw.nick || "匿名战友"),
+      text: String(raw.text || ""),
+      likes: Math.max(0, Number(raw.likes) || 0),
+    };
+  }
+
+  function mergeBarrageItems(newItems, { initial = false, launchNew = false } = {}) {
+    if (!Array.isArray(newItems) || !newItems.length) return false;
+    let changed = false;
+    const freshArr = [];
+    const byId = new Map(barrage.items.map((m) => [m.id, m]));
+    for (const raw of newItems) {
+      const clean = normalizeBarrageItem(raw);
+      if (!clean) continue;
+      const alreadySeen = barrage.seenIds.has(clean.id);
+      addBoundedSet(barrage.seenIds, clean.id, 240);
+      if (!alreadySeen) freshArr.push(clean);
+      if (byId.has(clean.id)) {
+        const existing = byId.get(clean.id);
+        if (existing.likes !== clean.likes) {
+          existing.likes = clean.likes;
+          changed = true;
+        }
+        continue;
+      }
+      byId.set(clean.id, clean);
+      barrage.items.push(clean);
+      changed = true;
+    }
+    if (changed) {
+      barrage.items.sort((a, b) => b.id - a.id);
+      if (barrage.items.length > 80) barrage.items.length = 80;
+    }
+    if (initial && freshArr.length > 0 && war.danmakuOn) {
+      const seeds = freshArr.slice(0, 5).reverse();
+      seeds.forEach((m) => enqueueDanmaku(m, false));
+    } else if (launchNew && freshArr.length > 0) {
+      freshArr
+        .sort((a, b) => a.id - b.id)
+        .forEach((m) => enqueueDanmaku(m, barrage.selfIds.has(m.id)));
+    }
+    return changed;
+  }
+
+  function reconcileBarrageWindow(windowItems) {
+    if (!Array.isArray(windowItems)) return false;
+    const normalized = [];
+    const validIds = new Set();
+    for (const raw of windowItems) {
+      const clean = normalizeBarrageItem(raw);
+      if (!clean || clean.id <= 0 || validIds.has(clean.id)) continue;
+      validIds.add(clean.id);
+      normalized.push(clean);
+    }
+    normalized.sort((a, b) => b.id - a.id);
+    if (normalized.length > 80) normalized.length = 80;
+
+    // Detect if visible wall changed (new items, updated like counts, or admin-hidden removals)
+    let changed = normalized.length !== barrage.items.length;
+    if (!changed) {
+      for (let i = 0; i < normalized.length; i++) {
+        const a = normalized[i];
+        const b = barrage.items[i];
+        if (!b || a.id !== b.id || a.likes !== b.likes || a.text !== b.text) {
+          changed = true;
+          break;
+        }
+      }
+    }
+
+    // Evict any moderated/hidden message not in authoritative visible window from pending/active danmaku
+    war.danmakuQueue = war.danmakuQueue.filter((q) => !(q.id > 0 && !validIds.has(q.id)));
+    war.danmakuActive = war.danmakuActive.filter((d) => !(d.id > 0 && !validIds.has(d.id)));
+
+    if (changed) {
+      barrage.items = normalized;
+    }
+    return changed;
+  }
+
+  async function fetchJsonWithTimeout(url, opts = {}, timeoutMs = 6000, externalCtrl = null) {
+    const ctrl = externalCtrl || (typeof AbortController === "function" ? new AbortController() : null);
+    const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
+    try {
+      const resp = await fetch(url, { ...opts, signal: ctrl ? ctrl.signal : undefined });
+      const data = await resp.json().catch(() => null);
+      return { resp, data };
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  async function pollBarrage() {
+    if (barrage.pollInFlight || document.hidden || !war.running) return;
+    barrage.pollInFlight = true;
+    const seq = ++barrage.pollSeq;
+    const base = getBarrageApiBase();
+    const ctrl = typeof AbortController === "function" ? new AbortController() : null;
+    barrage.pollAbortCtrl = ctrl;
+
+    try {
+      let pages = 0;
+      let anyChanged = false;
+      const wasUninitialized = !barrage.initialized;
+      let isInitial = wasUninitialized;
+
+      while (pages < 4 && war.running && !document.hidden) {
+        pages += 1;
+        const url = isInitial
+          ? `${base}?limit=80`
+          : `${base}?after_id=${barrage.pollCursor}&limit=30&include_window=1`;
+        const { resp, data } = await fetchJsonWithTimeout(url, { cache: "no-store" }, 6000, ctrl);
+        if (seq !== barrage.pollSeq) return;
+        if (!resp.ok || !data || data.ok !== true) throw new Error(`HTTP ${resp.status}`);
+
+        // Cursor advances strictly via server-confirmed GET page next_cursor (never skipped by POST!)
+        const nextCur = Number(data.next_cursor);
+        if (Number.isInteger(nextCur) && nextCur >= barrage.pollCursor) {
+          barrage.pollCursor = nextCur;
+        }
+        if (data.stats_24h && typeof data.stats_24h === "object") {
+          barrage.stats24h = data.stats_24h;
+        }
+
+        const merged = mergeBarrageItems(data.items || [], {
+          initial: isInitial,
+          launchNew: !isInitial,
+        });
+        let pageChanged = merged;
+
+        if (!isInitial && Array.isArray(data.window)) {
+          if (reconcileBarrageWindow(data.window)) pageChanged = true;
+        }
+
+        barrage.initialized = true;
+        if (isInitial || pageChanged) {
+          anyChanged = true;
+          renderBarrageWall();
+        }
+        isInitial = false;
+        if (!data.has_more) break;
+      }
+
+      if (seq !== barrage.pollSeq) return;
+      setBarrageSyncStatus(true, "全网实时同步");
+      if (!anyChanged && !wasUninitialized) {
+        renderBarragePulse();
+      }
+    } catch {
+      if (seq !== barrage.pollSeq) return;
+      if (!barrage.initialized) {
+        renderBarrageWall();
+      }
+      setBarrageSyncStatus(false, "本地预览模式");
+    } finally {
+      if (barrage.pollAbortCtrl === ctrl) barrage.pollAbortCtrl = null;
+      barrage.pollInFlight = false;
+    }
+  }
+
+  function startBarragePolling() {
+    if (barrage.pollTimer) return;
+    pollBarrage();
+    barrage.pollTimer = setInterval(() => {
+      if (war.running && !document.hidden) pollBarrage();
+    }, 4500);
+  }
+
+  function stopBarragePolling() {
+    barrage.pollSeq += 1;
+    if (barrage.pollAbortCtrl) {
+      try {
+        barrage.pollAbortCtrl.abort();
+      } catch {}
+      barrage.pollAbortCtrl = null;
+    }
+    if (barrage.pollTimer) {
+      clearInterval(barrage.pollTimer);
+      barrage.pollTimer = null;
+    }
+  }
+
+  function updateSendCooldownUi() {
+    const btn = $("btn-dm-send");
+    if (!btn) return;
+    const rem = Math.ceil((barrage.cooldownUntil - Date.now()) / 1000);
+    if (rem > 0) {
+      btn.disabled = true;
+      btn.textContent = `${rem}s`;
+    } else {
+      btn.disabled = false;
+      btn.textContent = "发射弹幕";
+      if (barrage.cooldownTimer) {
+        clearInterval(barrage.cooldownTimer);
+        barrage.cooldownTimer = null;
+      }
+    }
+  }
+
+  function startSendCooldown(sec = 4) {
+    barrage.cooldownUntil = Date.now() + sec * 1000;
+    updateSendCooldownUi();
+    if (barrage.cooldownTimer) clearInterval(barrage.cooldownTimer);
+    barrage.cooldownTimer = setInterval(updateSendCooldownUi, 250);
+  }
+
+  function applyComposeSide(side) {
+    barrage.composeSide = side === "SHORT" || side === "NEUTRAL" ? side : "LONG";
+    const cls = barrage.composeSide === "LONG" ? "is-long" : barrage.composeSide === "SHORT" ? "is-short" : "is-neutral";
+    $("dm-side-group")
+      ?.querySelectorAll(".dm-side-btn")
+      .forEach((b) => b.classList.toggle("active", b.dataset.side === barrage.composeSide));
+    const btn = $("btn-dm-send");
+    if (btn) {
+      btn.classList.remove("is-long", "is-short", "is-neutral");
+      btn.classList.add(cls);
+    }
+  }
+
+  async function submitBarrage(ev) {
+    ev.preventDefault();
+    if (Date.now() < barrage.cooldownUntil) return;
+
+    const nickEl = $("dm-nick");
+    const textEl = $("dm-input");
+    const nick = (nickEl?.value || "").trim();
+    const text = (textEl?.value || "").trim();
+    if (!text) {
+      showBarrageFeedback("请先输入弹幕或盘面留言内容", "warn", 2400);
+      textEl?.focus();
+      return;
+    }
+    if (text.length > 80) {
+      showBarrageFeedback("单条内容最多 80 字", "warn", 2800);
+      return;
+    }
+    if (nick) safeStoreSet("danclub_barrage_nick", nick.slice(0, 16));
+
+    const btn = $("btn-dm-send");
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "发射中…";
+    }
+
+    const payload = {
+      nick: nick || "匿名战友",
+      side: barrage.composeSide,
+      coin: war.activeCoin,
+      text,
+    };
+
+    try {
+      const { resp, data } = await fetchJsonWithTimeout(
+        getBarrageApiBase(),
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        },
+        6000
+      );
+      if (!resp.ok || !data || data.ok !== true) {
+        const errMsg = (data && data.error) || `发送失败（HTTP ${resp.status}）`;
+        showBarrageFeedback(errMsg, "err", 4200);
+        const retry = Number(data?.retry_after);
+        if (resp.status === 429 && Number.isFinite(retry) && retry > 0) {
+          startSendCooldown(Math.min(15, Math.ceil(retry)));
+        } else {
+          updateSendCooldownUi();
+        }
+        return;
+      }
+
+      if (textEl) textEl.value = "";
+      const item = data.item;
+      if (item && Number.isInteger(Number(item.id))) {
+        addBoundedSet(barrage.selfIds, Number(item.id), 100);
+        if (data.stats_24h && typeof data.stats_24h === "object") {
+          barrage.stats24h = data.stats_24h;
+        }
+        // Merge for immediate display ONLY — do NOT advance barrage.pollCursor so interleaved messages are never skipped!
+        mergeBarrageItems([item], { initial: false, launchNew: false });
+        if (war.danmakuOn) enqueueDanmaku(item, true);
+        renderBarrageWall();
+      }
+      setBarrageSyncStatus(true, "全网实时同步");
+      showBarrageFeedback(
+        war.danmakuOn ? "弹幕已直飞战场并同步前线留言墙" : "已同步至前线留言墙（飞屏弹幕当前关闭）",
+        "ok",
+        2600
+      );
+      startSendCooldown(4);
+    } catch {
+      if (textEl) textEl.value = "";
+      const localId = barrage.localSeq--;
+      const localItem = {
+        id: localId,
+        ts: Math.floor(Date.now() / 1000),
+        coin: payload.coin,
+        side: payload.side,
+        nick: payload.nick,
+        text: payload.text,
+        likes: 0,
+      };
+      addBoundedSet(barrage.selfIds, localId, 100);
+      barrage.items.unshift(localItem);
+      if (barrage.items.length > 80) barrage.items.length = 80;
+      if (war.danmakuOn) enqueueDanmaku(localItem, true);
+      setBarrageSyncStatus(false, "本地预览模式");
+      renderBarrageWall();
+      showBarrageFeedback("暂未连通弹幕服务器，已仅在本地战场飞屏预览", "warn", 3800);
+      startSendCooldown(3);
+    }
+  }
+
+  async function likeBarrageMessage(id) {
+    if (!Number.isInteger(id) || id <= 0) return;
+    if (barrage.likedIds.has(id) || barrage.likingIds.has(id)) return;
+    barrage.likingIds.add(id);
+    renderBarrageWall();
+
+    try {
+      const { resp, data } = await fetchJsonWithTimeout(
+        `${getBarrageApiBase()}/like`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id }),
+        },
+        5000
+      );
+      if (resp.ok && data && data.ok === true) {
+        addBoundedSet(barrage.likedIds, id, 200);
+        safeStoreSet("danclub_barrage_liked", JSON.stringify(Array.from(barrage.likedIds)));
+        const target = barrage.items.find((m) => m.id === id);
+        if (target) {
+          target.likes = Math.max(0, Number(data.likes) || target.likes);
+        }
+      } else {
+        const errMsg = (data && data.error) || "点赞失败，请稍后重试";
+        showBarrageFeedback(errMsg, "warn", 2600);
+      }
+    } catch {
+      showBarrageFeedback("网络异常，点赞未确认，可重试", "warn", 2600);
+    } finally {
+      barrage.likingIds.delete(id);
+      renderBarrageWall();
+    }
+  }
+
   /* ---------- Lifecycle & Event Wiring ---------- */
   function startArena() {
     if (!war.canvas) {
@@ -1753,6 +2452,7 @@
       war.lastFrameTs = performance.now();
       war.rafId = requestAnimationFrame(tick);
       connectSockets();
+      startBarragePolling();
       if (!war.userMuted && !document.hidden && (war.soundOn || war.pausedByHidden)) {
         playCurrentAnthem(false);
       }
@@ -1764,6 +2464,7 @@
     if (war.rafId) cancelAnimationFrame(war.rafId);
     war.rafId = null;
     disconnectSockets();
+    stopBarragePolling();
     disarmGestureUnlock();
     stopAnthem(true);
   }
@@ -1828,6 +2529,61 @@
     });
 
     syncAudioUi();
+    syncDanmakuToggleUi();
+    applyComposeSide(barrage.composeSide);
+
+    const savedNick = safeStoreGet("danclub_barrage_nick", "");
+    if (savedNick && $("dm-nick")) {
+      $("dm-nick").value = savedNick.slice(0, 16);
+    }
+
+    $("btn-war-danmaku")?.addEventListener("click", () => {
+      war.danmakuOn = !war.danmakuOn;
+      safeStoreSet("danclub_war_danmaku", war.danmakuOn ? "1" : "0");
+      if (!war.danmakuOn) {
+        war.danmakuActive = [];
+        war.danmakuQueue = [];
+      }
+      syncDanmakuToggleUi();
+    });
+
+    $("dm-side-group")?.addEventListener("click", (e) => {
+      const btn = e.target.closest(".dm-side-btn");
+      if (!btn || !btn.dataset.side) return;
+      applyComposeSide(btn.dataset.side);
+    });
+
+    $("dm-form")?.addEventListener("submit", submitBarrage);
+
+    $("dm-filter-group")?.addEventListener("click", (e) => {
+      const btn = e.target.closest(".seg-btn");
+      if (!btn || !btn.dataset.side) return;
+      barrage.filterSide = btn.dataset.side;
+      $("dm-filter-group")
+        .querySelectorAll(".seg-btn")
+        .forEach((b) => b.classList.toggle("active", b === btn));
+      renderBarrageWall();
+    });
+
+    $("dm-msg-list")?.addEventListener("click", (e) => {
+      const target = e.target.closest("[data-action]");
+      if (!target) return;
+      const action = target.dataset.action;
+      const id = Number(target.dataset.id);
+      if (action === "like") {
+        likeBarrageMessage(id);
+      } else if (action === "replay") {
+        const msg = barrage.items.find((m) => m.id === id);
+        if (!msg) return;
+        if (!war.danmakuOn) {
+          war.danmakuOn = true;
+          safeStoreSet("danclub_war_danmaku", "1");
+          syncDanmakuToggleUi();
+        }
+        enqueueDanmaku(msg, true);
+        showBarrageFeedback("已重放该条弹幕飞越战场", "ok", 1800);
+      }
+    });
 
     $("btn-war-sound")?.addEventListener("click", () => {
       if (war.soundOn) {
@@ -1910,8 +2666,9 @@
     document.addEventListener("visibilitychange", () => {
       if (document.hidden) {
         if (war.soundOn) stopAnthem(true);
-      } else if (war.running && war.soundOn && war.pausedByHidden) {
-        playCurrentAnthem(false);
+      } else if (war.running) {
+        if (war.soundOn && war.pausedByHidden) playCurrentAnthem(false);
+        pollBarrage();
       }
     });
 

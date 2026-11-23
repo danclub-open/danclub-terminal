@@ -249,6 +249,7 @@
                 <button class="seg-btn" data-coin="SOL" type="button">SOL</button>
                 <button class="seg-btn" data-coin="HYPE" type="button">HYPE</button>
               </div>
+              <button class="btn btn-compact btn-danmaku-toggle active" id="btn-war-danmaku" type="button" title="开启或隐藏战场飞屏弹幕">弹幕 开</button>
               <button class="btn btn-compact" id="btn-war-poster" type="button">导出战报图</button>
               <button class="btn btn-compact btn-accent-ghost" id="btn-war-fullscreen" type="button">副屏全屏</button>
             </div>
@@ -291,13 +292,86 @@
             <span class="mono small muted" id="war-ws-status">连接中…</span>
           </div>
 
-          <!-- 60fps HiDPI Tactical Air-Combat Canvas -->
-          <div class="war-canvas-wrap">
-            <canvas id="war-canvas"></canvas>
-            <button class="war-audio-prompt" id="war-audio-prompt" type="button">
-              ▶ 点击燃起五国战歌高潮 &amp; 空战音效（5 首 24–26s 轮播）
-            </button>
-            <div class="chart-tooltip" id="war-canvas-tip"></div>
+          <!-- 60fps HiDPI Tactical Air-Combat Stage + Live Danmaku & Frontline Message Rail -->
+          <div class="war-stage-layout">
+            <div class="war-stage-main">
+              <div class="war-canvas-wrap">
+                <canvas id="war-canvas"></canvas>
+                <button class="war-audio-prompt" id="war-audio-prompt" type="button">
+                  ▶ 点击燃起五国战歌高潮 &amp; 空战音效（5 首 24–26s 轮播）
+                </button>
+                <div class="chart-tooltip" id="war-canvas-tip"></div>
+              </div>
+
+              <!-- Quick Danmaku & Shoutbox Launcher -->
+              <form class="war-danmaku-bar" id="dm-form" autocomplete="off">
+                <div class="dm-side-group" id="dm-side-group" role="group" aria-label="选择发言阵营">
+                  <button class="dm-side-btn active is-long" data-side="LONG" type="button">多军</button>
+                  <button class="dm-side-btn is-short" data-side="SHORT" type="button">空军</button>
+                  <button class="dm-side-btn is-neutral" data-side="NEUTRAL" type="button">观望</button>
+                </div>
+                <input
+                  class="dm-nick-input"
+                  id="dm-nick"
+                  type="text"
+                  maxlength="16"
+                  placeholder="昵称(选填)"
+                  aria-label="发言昵称"
+                />
+                <input
+                  class="dm-text-input"
+                  id="dm-input"
+                  type="text"
+                  maxlength="80"
+                  placeholder="发条弹幕助威或留盘面观点（回车直飞战场）…"
+                  aria-label="弹幕与留言内容"
+                />
+                <button class="btn btn-compact dm-send-btn is-long" id="btn-dm-send" type="submit">
+                  发射弹幕
+                </button>
+              </form>
+              <div class="dm-feedback small" id="dm-feedback" aria-live="polite"></div>
+            </div>
+
+            <!-- Live Frontline Message Wall -->
+            <aside class="war-chat-rail" aria-label="前线留言墙">
+              <div class="war-rail-head">
+                <div class="war-rail-title">
+                  <span>前线留言墙</span>
+                  <span class="mono small muted" id="dm-count-badge">0 条</span>
+                </div>
+                <div class="seg-group seg-xs" id="dm-filter-group">
+                  <button class="seg-btn active" data-side="ALL" type="button">全</button>
+                  <button class="seg-btn" data-side="LONG" type="button">多</button>
+                  <button class="seg-btn" data-side="SHORT" type="button">空</button>
+                </div>
+              </div>
+              <div class="war-rail-pulse">
+                <div class="war-rail-pulse-meta small mono">
+                  <span class="muted">24h 弹幕声量</span>
+                  <span>
+                    <b class="ok" id="dm-pulse-long">多 50%</b>
+                    <span class="muted">·</span>
+                    <b class="risk" id="dm-pulse-short">空 50%</b>
+                  </span>
+                </div>
+                <div class="war-rail-pulse-track">
+                  <div class="war-bar-long" id="dm-pulse-bar-long" style="width:50%;"></div>
+                  <div class="war-bar-short" id="dm-pulse-bar-short" style="width:50%;"></div>
+                </div>
+              </div>
+              <div class="war-msg-list" id="dm-msg-list">
+                <div class="dm-pin">
+                  <span class="dm-badge dm-badge-sys">战情广播</span>
+                  <span>选择多/空阵营，输入即飞屏弹幕并同步全网留言；点击任意留言可重放弹幕。</span>
+                </div>
+              </div>
+              <div class="war-rail-foot small muted">
+                <span class="dm-sync-dot" id="dm-sync-dot"></span>
+                <span id="dm-sync-status">接入前线弹幕信道…</span>
+                <span class="dm-foot-hint">文明交流 · 禁外链</span>
+              </div>
+            </aside>
           </div>
 
           <div class="war-legend-row">
