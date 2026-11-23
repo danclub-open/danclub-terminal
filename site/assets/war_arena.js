@@ -837,19 +837,19 @@
       const top = arr.slice(0, maxPerSide);
       top.forEach((it, idx) => {
         const rows = Math.max(1, top.length);
-        const yFrac = (idx + 0.85) / (rows + 0.7);
+        const yFrac = narrow ? (idx + 0.55) / (rows + 0.1) : (idx + 0.85) / (rows + 0.7);
         const xBase = narrow
-          ? (side === "LONG" ? 0.16 : 0.84)
+          ? (side === "LONG" ? 0.17 : 0.83)
           : (side === "LONG" ? 0.075 + (idx % 2) * 0.095 : 0.925 - (idx % 2) * 0.095);
-        const sizeBase = narrow ? 13 : 15;
-        const sizeMax = narrow ? 22 : 30;
-        const size = Math.max(sizeBase, Math.min(sizeMax, (narrow ? 9 : 11) + Math.log10(Math.max(1e6, it.pos.usd) / 1e6) * (narrow ? 7 : 9.5)));
+        const sizeBase = narrow ? 12 : 15;
+        const sizeMax = narrow ? 18 : 30;
+        const size = Math.max(sizeBase, Math.min(sizeMax, (narrow ? 8 : 11) + Math.log10(Math.max(1e6, it.pos.usd) / 1e6) * (narrow ? 5.5 : 9.5)));
         war.carriers.push({
           ent: it.ent,
           pos: it.pos,
           side,
           xFrac: xBase,
-          yFrac: 0.14 + yFrac * 0.72,
+          yFrac: narrow ? 0.13 + yFrac * 0.74 : 0.14 + yFrac * 0.72,
           size,
           phase: idx * 1.15 + (side === "LONG" ? 0 : 2.3),
           x: 0,
@@ -936,13 +936,13 @@
     if (dot) dot.classList.toggle("online", up);
     if (lbl) {
       const exCnt = Number(war.data?.liquidations?.exchanges_count) || 0;
-      const snapLbl = exCnt > 0 ? `CoinGlass ${exCnt}所快照` : "CoinGlass 快照";
+      const snapLbl = exCnt > 0 ? `${exCnt}所快照` : "CoinGlass 快照";
       if (up) {
-        lbl.textContent = `毫秒强平直连 (${sources.join("+")}) + ${snapLbl}`;
+        lbl.textContent = `${sources.join("+")} 实时强平 · ${snapLbl}`;
       } else if (war.liqWsOkxUp && !war.okxCtValLoaded) {
-        lbl.textContent = `OKX 合约乘数加载中 · ${snapLbl}`;
+        lbl.textContent = `OKX 乘数加载中 · ${snapLbl}`;
       } else {
-        lbl.textContent = `${snapLbl}（实时强平流连接中）`;
+        lbl.textContent = `${snapLbl} · 实时流连接中`;
       }
     }
   }
@@ -3413,123 +3413,154 @@
     const feedEl = $("war-liq-feed");
     if (!feedEl) return;
 
-    const rows = [];
     const filterCoin = war.liqScope === "COIN" ? war.activeCoin : null;
     const nowSec = Math.floor(Date.now() / 1000);
 
-    // 1. Live WS Liquidation events + CoinGlass snapshot events (1-to-1 dedup; chronological sort!)
-    if (war.liqTypeFilter === "ALL" || war.liqTypeFilter === "LIQ") {
-      const liveShown = [];
-      war.liveLiqEvents.forEach((ev) => {
-        if (filterCoin && ev.coin !== filterCoin) return;
-        liveShown.push(ev);
-        const ageSec = nowSec - (Number(ev.ts) || 0);
-        const isFreshLive = ageSec >= -60 && ageSec <= 180;
-        rows.push({ kind: "LIQ", ts: Number(ev.ts) || 0, prio: 1, live: isFreshLive, data: ev });
-      });
-      const usedLiveIdx = new Set();
-      (liq?.recent_events || []).forEach((ev) => {
-        if (filterCoin && ev.coin !== filterCoin) return;
-        const evTs = Number(ev.ts) || 0;
-        const evUsd = Number(ev.usd) || 0;
-        const matchIdx = liveShown.findIndex(
-          (lv, idx) =>
-            !usedLiveIdx.has(idx) &&
-            lv.coin === ev.coin &&
-            lv.side === ev.side &&
-            lv.ex_short === ev.ex_short &&
-            Math.abs(lv.ts - evTs) <= 15 &&
-            Math.abs(lv.usd - evUsd) <= Math.max(evUsd, lv.usd) * 0.12
-        );
-        if (matchIdx >= 0) {
-          usedLiveIdx.add(matchIdx);
-          return;
-        }
-        rows.push({ kind: "LIQ", ts: evTs, prio: 0, live: false, data: ev });
-      });
-    }
+    // Collect typed buckets independently so counts & grouped sections make every data type unmistakably clear!
+    const liqRows = [];
+    const liveShown = [];
+    war.liveLiqEvents.forEach((ev) => {
+      if (filterCoin && ev.coin !== filterCoin) return;
+      liveShown.push(ev);
+      const ageSec = nowSec - (Number(ev.ts) || 0);
+      const isFreshLive = ageSec >= -60 && ageSec <= 180;
+      liqRows.push({ kind: "LIQ", ts: Number(ev.ts) || 0, prio: 1, live: isFreshLive, data: ev });
+    });
+    const usedLiveIdx = new Set();
+    (liq?.recent_events || []).forEach((ev) => {
+      if (filterCoin && ev.coin !== filterCoin) return;
+      const evTs = Number(ev.ts) || 0;
+      const evUsd = Number(ev.usd) || 0;
+      const matchIdx = liveShown.findIndex(
+        (lv, idx) =>
+          !usedLiveIdx.has(idx) &&
+          lv.coin === ev.coin &&
+          lv.side === ev.side &&
+          lv.ex_short === ev.ex_short &&
+          Math.abs(lv.ts - evTs) <= 15 &&
+          Math.abs(lv.usd - evUsd) <= Math.max(evUsd, lv.usd) * 0.12
+      );
+      if (matchIdx >= 0) {
+        usedLiveIdx.add(matchIdx);
+        return;
+      }
+      liqRows.push({ kind: "LIQ", ts: evTs, prio: 0, live: false, data: ev });
+    });
 
-    // 2. CoinGlass Wick Alerts (WICK filter strictly shows WICK_UP/WICK_DOWN; LIQ waves show under ALL/LIQ)
-    if (war.liqTypeFilter === "ALL" || war.liqTypeFilter === "WICK" || war.liqTypeFilter === "LIQ") {
-      (liq?.wick_alerts || []).forEach((wk) => {
-        if (filterCoin && wk.coin !== "ALL" && wk.coin !== filterCoin) return;
-        const isWick = wk.kind === "WICK_UP" || wk.kind === "WICK_DOWN";
-        if (war.liqTypeFilter === "WICK" && !isWick) return;
-        if (war.liqTypeFilter === "LIQ" && isWick) return;
-        rows.push({ kind: "WICK", ts: Number(wk.ts) || 0, prio: 0, live: false, data: wk });
+    const wickRows = [];
+    (liq?.wick_alerts || []).forEach((wk) => {
+      if (filterCoin && wk.coin !== "ALL" && wk.coin !== filterCoin) return;
+      const isWick = wk.kind === "WICK_UP" || wk.kind === "WICK_DOWN";
+      if (isWick) {
+        wickRows.push({ kind: "WICK", ts: Number(wk.ts) || 0, prio: 0, live: false, data: wk });
+      } else {
+        liqRows.push({ kind: "WICK", ts: Number(wk.ts) || 0, prio: 0, live: false, data: wk });
+      }
+    });
+    liqRows.sort((a, b) => b.ts - a.ts || b.prio - a.prio);
+    wickRows.sort((a, b) => b.ts - a.ts);
+
+    const allMoves = war.data?.recent_moves || [];
+    const whaleRows = (filterCoin ? allMoves.filter((m) => m.coin === filterCoin) : allMoves).map((mv, idx) => ({
+      kind: "WHALE",
+      ts: Number(mv.ts) || 0,
+      prio: -idx,
+      live: false,
+      data: mv,
+    }));
+
+    // Update live per-type counts on filter tabs so traders see data composition at a glance!
+    const cntMap = {
+      ALL: liqRows.length + whaleRows.length + wickRows.length,
+      LIQ: liqRows.length,
+      WHALE: whaleRows.length,
+      WICK: wickRows.length,
+    };
+    const lblMap = { ALL: "全部", LIQ: "强平单", WHALE: "巨鲸调仓", WICK: "插针预警" };
+    $("liq-feed-filter")
+      ?.querySelectorAll(".seg-btn")
+      .forEach((b) => {
+        const k = b.dataset.kind;
+        if (lblMap[k]) b.textContent = `${lblMap[k]} ${cntMap[k] ?? 0}`;
       });
-    }
 
-    // 3. Real Flagship Whale Position Moves (STRICT coin filter: never backfill other coins into a coin view!)
-    if (war.liqTypeFilter === "ALL" || war.liqTypeFilter === "WHALE") {
-      const allMoves = war.data?.recent_moves || [];
-      const picked = filterCoin ? allMoves.filter((m) => m.coin === filterCoin) : allMoves;
-      picked.forEach((mv, idx) => {
-        rows.push({ kind: "WHALE", ts: Number(mv.ts) || 0, prio: -idx, live: false, data: mv });
-      });
-    }
+    const renderRow = (r) => {
+      if (r.kind === "LIQ") {
+        const ev = r.data;
+        const isLong = ev.side === "LONG";
+        const pxLabel = ev.px_kind ? `${ev.px_kind} ` : "@ ";
+        const pxTxt = ev.px ? ` · ${pxLabel}${fmtPxShort(ev.px)}` : "";
+        const timeLbl = r.live
+          ? `<span class="liq-tag liq-tag-live">实时</span><span class="liq-ts">${esc(fmtBarrageTime(ev.ts))}</span>`
+          : `<span class="liq-ts">${esc(fmtBarrageTime(ev.ts))}</span>`;
+        return `
+          <div class="liq-item ${isLong ? "kind-liq-long" : "kind-liq-short"}">
+            <div class="liq-item-top">
+              <span class="liq-tag ${isLong ? "liq-tag-long" : "liq-tag-short"}">${isLong ? "爆多" : "爆空"}</span>
+              <span class="liq-ex-pill">${esc(ev.ex_short || ev.ex || "CEX")}</span>
+              <span class="liq-coin-lbl">${esc(ev.coin)}</span>
+              ${timeLbl}
+            </div>
+            <div class="liq-item-body">
+              ${isLong ? "多单强平" : "空单强平"} <b class="${isLong ? "ok" : "risk"}">${fmtCompact(ev.usd)}</b><span class="mono muted">${esc(pxTxt)}</span>
+            </div>
+          </div>`;
+      }
+      if (r.kind === "WICK") {
+        const wk = r.data;
+        const tagTxt = wk.kind === "WICK_UP" || wk.kind === "WICK_DOWN" ? "插针预警" : "爆仓波峰";
+        return `
+          <div class="liq-item kind-wick">
+            <div class="liq-item-top">
+              <span class="liq-tag liq-tag-wick">${tagTxt}</span>
+              <span class="liq-coin-lbl">${esc(wk.coin)}</span>
+              <span class="liq-ts">${esc(fmtBarrageTime(wk.ts))}</span>
+            </div>
+            <div class="liq-item-body"><b>${esc(wk.title)}</b>${wk.detail ? `<div class="muted small">${esc(wk.detail)}</div>` : ""}</div>
+          </div>`;
+      }
+      const mv = r.data;
+      const winTxt = mv.delta_window_h ? `${mv.delta_window_h}h · 快照` : "快照";
+      const dirTxt = mv.side === "LONG" ? "多" : "空";
+      return `
+        <div class="liq-item kind-whale" data-ent-id="${esc(mv.id)}" title="点击查看该实盘巨鲸完整持仓档案">
+          <div class="liq-item-top">
+            <span class="liq-tag liq-tag-whale">巨鲸调仓</span>
+            <span class="liq-ex-pill">${esc(mv.tier_code)}级</span>
+            <span class="liq-coin-lbl">${esc(mv.display)}</span>
+            <span class="liq-ts">${esc(winTxt)}</span>
+          </div>
+          <div class="liq-item-body">
+            主仓 ${esc(mv.coin)}（偏${dirTxt}）<b>${esc(mv.action)}</b> · 全账户净变动 <b class="${mv.delta_usd >= 0 ? "ok" : "risk"}">${fmtSignedCompact(mv.delta_usd)}</b>
+          </div>
+        </div>`;
+    };
 
-    rows.sort((a, b) => b.ts - a.ts || b.prio - a.prio);
-
-    if (!rows.length) {
-      feedEl.innerHTML = `<div class="dm-empty">当前筛选条件下暂无${filterCoin ? ` ${esc(filterCoin)}` : ""} 爆仓或巨鲸异动记录</div>`;
+    if (war.liqTypeFilter === "ALL") {
+      const blocks = [];
+      if (liqRows.length) {
+        blocks.push(`<div class="liq-sec-head"><span>实盘大额强平（最新）</span><span class="mono">${liqRows.length} 条</span></div>`);
+        blocks.push(...liqRows.slice(0, 12).map(renderRow));
+      }
+      if (wickRows.length) {
+        blocks.push(`<div class="liq-sec-head"><span>插针爆仓预警</span><span class="mono">${wickRows.length} 条</span></div>`);
+        blocks.push(...wickRows.slice(0, 4).map(renderRow));
+      }
+      if (whaleRows.length) {
+        blocks.push(`<div class="liq-sec-head"><span>实盘旗舰调仓（点击查档）</span><span class="mono">${whaleRows.length} 条</span></div>`);
+        blocks.push(...whaleRows.slice(0, 8).map(renderRow));
+      }
+      feedEl.innerHTML = blocks.length
+        ? blocks.join("")
+        : `<div class="dm-empty">当前筛选条件下暂无${filterCoin ? ` ${esc(filterCoin)}` : ""} 爆仓或巨鲸异动记录</div>`;
       return;
     }
 
-    feedEl.innerHTML = rows
-      .slice(0, 42)
-      .map((r) => {
-        if (r.kind === "LIQ") {
-          const ev = r.data;
-          const isLong = ev.side === "LONG";
-          const pxLabel = ev.px_kind ? `${ev.px_kind} ` : "@ ";
-          const pxTxt = ev.px ? ` · ${pxLabel}${fmtPxShort(ev.px)}` : "";
-          const timeLbl = r.live
-            ? `<span class="liq-tag liq-tag-live">实时</span><span class="liq-ts">${esc(fmtBarrageTime(ev.ts))}</span>`
-            : `<span class="liq-ts">${esc(fmtBarrageTime(ev.ts))}</span>`;
-          return `
-            <div class="liq-item ${isLong ? "kind-liq-long" : "kind-liq-short"}">
-              <div class="liq-item-top">
-                <span class="liq-tag ${isLong ? "liq-tag-long" : "liq-tag-short"}">${isLong ? "爆多" : "爆空"}</span>
-                <span class="liq-ex-pill">${esc(ev.ex_short || ev.ex || "CEX")}</span>
-                <span class="liq-coin-lbl">${esc(ev.coin)}</span>
-                ${timeLbl}
-              </div>
-              <div class="liq-item-body">
-                ${isLong ? "多单强平" : "空单强平"} <b class="${isLong ? "ok" : "risk"}">${fmtCompact(ev.usd)}</b><span class="mono muted">${esc(pxTxt)}</span>
-              </div>
-            </div>`;
-        }
-        if (r.kind === "WICK") {
-          const wk = r.data;
-          const tagTxt = wk.kind === "WICK_UP" || wk.kind === "WICK_DOWN" ? "插针预警" : "爆仓波峰";
-          return `
-            <div class="liq-item kind-wick">
-              <div class="liq-item-top">
-                <span class="liq-tag liq-tag-wick">${tagTxt}</span>
-                <span class="liq-coin-lbl">${esc(wk.coin)}</span>
-                <span class="liq-ts">${esc(fmtBarrageTime(wk.ts))}</span>
-              </div>
-              <div class="liq-item-body"><b>${esc(wk.title)}</b>${wk.detail ? `<div class="muted small">${esc(wk.detail)}</div>` : ""}</div>
-            </div>`;
-        }
-        const mv = r.data;
-        const winTxt = mv.delta_window_h ? `${mv.delta_window_h}h · 快照` : "快照";
-        const dirTxt = mv.side === "LONG" ? "多" : "空";
-        return `
-          <div class="liq-item kind-whale" data-ent-id="${esc(mv.id)}" title="点击查看该实盘巨鲸完整持仓档案">
-            <div class="liq-item-top">
-              <span class="liq-tag liq-tag-whale">巨鲸调仓</span>
-              <span class="liq-ex-pill">${esc(mv.tier_code)}级</span>
-              <span class="liq-coin-lbl">${esc(mv.display)}</span>
-              <span class="liq-ts">${esc(winTxt)}</span>
-            </div>
-            <div class="liq-item-body">
-              主仓 ${esc(mv.coin)}（偏${dirTxt}）<b>${esc(mv.action)}</b> · 全账户净变动 <b class="${mv.delta_usd >= 0 ? "ok" : "risk"}">${fmtSignedCompact(mv.delta_usd)}</b>
-            </div>
-          </div>`;
-      })
-      .join("");
+    const pickedList =
+      war.liqTypeFilter === "LIQ" ? liqRows : war.liqTypeFilter === "WICK" ? wickRows : whaleRows;
+    feedEl.innerHTML = pickedList.length
+      ? pickedList.slice(0, 40).map(renderRow).join("")
+      : `<div class="dm-empty">当前筛选条件下暂无${filterCoin ? ` ${esc(filterCoin)}` : ""} ${esc(lblMap[war.liqTypeFilter] || "")}记录</div>`;
   }
 
   /* ---------- Lifecycle & Event Wiring ---------- */
