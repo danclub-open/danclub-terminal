@@ -16,6 +16,7 @@ import fcntl
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import shlex
@@ -1134,12 +1135,53 @@ def _clean_bundle(bundle: dict[str, Any], *, blocklist_path: Path | None = None)
                         "count": _require_bounded_int(int(b.get("count") or 0), f"whales.liquidations.windows.{wn}.{sc}.count", 0, 10_000_000),
                         "top_exchanges": top_ex_clean,
                     }
+        clean_hourly: dict[str, list[dict[str, Any]]] = {}
+        if isinstance(liq.get("hourly_24h"), dict):
+            for sc in ("ALL", "BTC", "ETH", "SOL", "HYPE"):
+                arr = liq["hourly_24h"].get(sc)
+                if not isinstance(arr, list) or len(arr) != 24:
+                    continue
+                pts = []
+                valid_series = True
+                prev_ts: int | None = None
+                for b in arr:
+                    if not isinstance(b, dict):
+                        valid_series = False
+                        break
+                    raw_ts = b.get("ts")
+                    raw_lu = b.get("long_usd")
+                    raw_su = b.get("short_usd")
+                    if any(isinstance(v, bool) for v in (raw_ts, raw_lu, raw_su)):
+                        valid_series = False
+                        break
+                    try:
+                        ts_v = int(raw_ts)
+                        lu = float(raw_lu)
+                        su = float(raw_su)
+                    except (TypeError, ValueError, OverflowError):
+                        valid_series = False
+                        break
+                    if ts_v <= 0 or not (math.isfinite(lu) and math.isfinite(su) and lu >= 0 and su >= 0):
+                        valid_series = False
+                        break
+                    if prev_ts is not None and (ts_v - prev_ts) != 3600:
+                        valid_series = False
+                        break
+                    prev_ts = ts_v
+                    pts.append({
+                        "ts": ts_v,
+                        "long_usd": round(lu, 0),
+                        "short_usd": round(su, 0),
+                    })
+                if valid_series and len(pts) == 24:
+                    clean_hourly[sc] = pts
         whales["liquidations"] = {
             "available": bool(liq.get("available")),
             "source": sanitize_text(liq.get("source"), max_len=48) or "CoinGlass 全网永续强平统计",
             "updated_at": int(liq.get("updated_at") or 0),
             "exchanges_count": int(liq.get("exchanges_count") or 0),
             "windows": clean_wins,
+            "hourly_24h": clean_hourly,
             "recent_events": clean_liq_evs[:40],
             "wick_alerts": clean_wicks[:10],
         }
@@ -1150,6 +1192,7 @@ def _clean_bundle(bundle: dict[str, Any], *, blocklist_path: Path | None = None)
             "updated_at": 0,
             "exchanges_count": 0,
             "windows": {},
+            "hourly_24h": {},
             "recent_events": [],
             "wick_alerts": [],
         }

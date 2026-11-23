@@ -72,6 +72,7 @@
 
   const war = {
     data: null,
+    flows: null,
     activeCoin: "BTC",
     activeCohortCoin: "BTC",
     filterTier: "ALL",
@@ -129,6 +130,10 @@
     liqTypeFilter: "ALL",
     lastMagRenderTs: 0,
     lastLiqSfxTs: 0,
+    lastRadarBeepTs: 0,
+    liqBeepOn: safeStoreGet("danclub_war_liq_beep", "1") !== "0",
+    redCriticalSeen: new Map(),
+    redCriticalPrevIds: new Map(),
     rafId: null,
     running: false,
     canvas: null,
@@ -744,7 +749,57 @@
     }
   }
 
+  function syncLiqBeepUi() {
+    const btn = $("btn-war-liq-beep");
+    if (!btn) return;
+    btn.textContent = war.liqBeepOn ? "强平音 开" : "强平音 关";
+    btn.classList.toggle("btn-toggle-active", war.liqBeepOn);
+    btn.setAttribute("aria-pressed", war.liqBeepOn ? "true" : "false");
+  }
+
+  function playLiqRadarBeep(isCritical = false, fromGesture = false) {
+    if (!war.liqBeepOn && !fromGesture) return;
+    const nowMs = Date.now();
+    if (!fromGesture && nowMs - war.lastRadarBeepTs < 500) return;
+    war.lastRadarBeepTs = nowMs;
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return;
+      if (!war.audioCtx) {
+        if (!fromGesture) return;
+        war.audioCtx = new Ctx();
+      }
+      const ctx = war.audioCtx;
+      const fire = () => {
+        const now = ctx.currentTime + 0.01;
+        const notes = isCritical
+          ? [
+              { freq: 987.77, start: 0.0, dur: 0.13, gain: 0.15 },
+              { freq: 1318.51, start: 0.11, dur: 0.24, gain: 0.16 },
+            ]
+          : [{ freq: 783.99, start: 0.0, dur: 0.18, gain: 0.12 }];
+        notes.forEach((n) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = isCritical ? "triangle" : "sine";
+          osc.frequency.setValueAtTime(n.freq, now + n.start);
+          gain.gain.setValueAtTime(0.0001, now + n.start);
+          gain.gain.exponentialRampToValueAtTime(n.gain, now + n.start + 0.012);
+          gain.gain.exponentialRampToValueAtTime(0.0001, now + n.start + n.dur);
+          osc.connect(gain).connect(ctx.destination);
+          osc.start(now + n.start);
+          osc.stop(now + n.start + n.dur + 0.02);
+        });
+      };
+      if (ctx.state === "running") fire();
+      else if (fromGesture && ctx.state === "suspended") ctx.resume().then(fire).catch(() => {});
+    } catch {}
+  }
+
   function playLiqExplosionSfx(usd) {
+    if (war.liqBeepOn) {
+      playLiqRadarBeep(usd >= 500_000, false);
+    }
     if (!war.soundOn || war.userMuted || war.volume <= 0) return;
     const nowMs = Date.now();
     if (nowMs - war.lastLiqSfxTs < 320) return;
@@ -3254,6 +3309,12 @@
     else renderBarrageWall();
   }
 
+  function strictNum(v) {
+    if (v === null || v === undefined || v === "" || typeof v === "boolean") return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+
   function renderLiqMagnet() {
     const coin = war.activeCoin;
     const markEl = $("war-mag-mark");
@@ -3269,9 +3330,11 @@
     const displayPx = hlLivePx || snapPx;
     const pxTag = hlLivePx ? "HL 标记价" : "快照";
     markEl.textContent = displayPx > 0 ? `${coin} ${fmtPxShort(displayPx)} (${pxTag})` : `${coin} --`;
+    renderLeverageCrowding(coin);
 
     const flagships = war.data?.flagships || [];
     if (!flagships.length) {
+      if (hlLivePx) war.redCriticalPrevIds.set(coin, new Set());
       ticksEl.innerHTML = "";
       longEl.textContent = "⬇ 多头强平墙：暂无单所旗舰强平数据";
       shortEl.textContent = "⬆ 空头强平墙：暂无单所旗舰强平数据";
@@ -3362,6 +3425,170 @@
     } else {
       shortEl.textContent = "⬆ 空头强平墙：25%内无单所旗舰强平位";
     }
+
+    // Edge-triggered radar alert ONLY when a verified HL flagship newly crosses into <3% critical zone (5m cooldown)
+    if (hlLivePx) {
+      const nowMs = Date.now();
+      const curCritIds = new Set([...longs, ...shorts].filter((x) => x.liveDist < 3.0).map((x) => x.id));
+      const prevCritIds = war.redCriticalPrevIds.get(coin);
+      if (!prevCritIds) {
+        // First live HL observation for this coin: establish baseline silently
+        curCritIds.forEach((id) => war.redCriticalSeen.set(`${coin}:${id}`, nowMs));
+        war.redCriticalPrevIds.set(coin, curCritIds);
+      } else {
+        let triggered = false;
+        curCritIds.forEach((id) => {
+          if (prevCritIds.has(id)) return;
+          const k = `${coin}:${id}`;
+          const lastBeep = war.redCriticalSeen.get(k) || 0;
+          if (nowMs - lastBeep > 300_000) {
+            war.redCriticalSeen.set(k, nowMs);
+            triggered = true;
+          }
+        });
+        war.redCriticalPrevIds.set(coin, curCritIds);
+        if (triggered) playLiqRadarBeep(true, false);
+      }
+    }
+  }
+
+  function renderLeverageCrowding(coin) {
+    const el = $("war-mag-crowd");
+    if (!el) return;
+    const fl = war.flows;
+    if (!fl) {
+      el.innerHTML = `<span class="muted">杠杆拥挤度：等待资金流快照…</span>`;
+      return;
+    }
+    const bn = (fl.bn_oi_radar || []).find((x) => String(x.base || "").toUpperCase() === coin) || null;
+    const hl = (fl.hyperliquid?.top_markets || []).find((x) => String(x.coin || "").toUpperCase() === coin) || null;
+    if (!bn && !hl) {
+      el.innerHTML = `<span class="muted">杠杆拥挤度：暂无 ${esc(coin)} 持仓与费率数据</span>`;
+      return;
+    }
+
+    const parts = [];
+    const fundVals = [];
+    const bnOi = strictNum(bn?.oi_usd);
+    const bnOi1h = strictNum(bn?.chg_1h_oi_pct);
+    const bnFund = strictNum(bn?.funding_ann_pct);
+    if (bnOi !== null && bnOi > 0) {
+      const oi1hTxt = bnOi1h !== null ? ` (${bnOi1h >= 0 ? "+" : ""}${bnOi1h.toFixed(2)}%)` : "";
+      parts.push(`<span>BN 持仓 <b>${fmtCompact(bnOi)}</b><span class="muted">${esc(oi1hTxt)}</span></span>`);
+    }
+    if (bnFund !== null) {
+      fundVals.push(bnFund);
+      parts.push(`<span>BN 费率 <b class="${bnFund >= 10 ? "warn" : bnFund <= -8 ? "ok" : ""}">${bnFund >= 0 ? "+" : ""}${bnFund.toFixed(1)}%/年</b></span>`);
+    }
+
+    const hlOi = strictNum(hl?.oi_usd);
+    const hlFund = strictNum(hl?.funding_ann_pct);
+    if (hlOi !== null && hlOi > 0) {
+      parts.push(`<span>HL 持仓 <b>${fmtCompact(hlOi)}</b></span>`);
+    }
+    if (hlFund !== null) {
+      fundVals.push(hlFund);
+      parts.push(`<span>HL 费率 <b class="${hlFund >= 10 ? "warn" : hlFund <= -8 ? "ok" : ""}">${hlFund >= 0 ? "+" : ""}${hlFund.toFixed(1)}%/年</b></span>`);
+    }
+
+    if (!parts.length) {
+      el.innerHTML = `<span class="muted">杠杆拥挤度：暂无 ${esc(coin)} 有效持仓与费率</span>`;
+      return;
+    }
+
+    let badgeTxt = "费率数据不足";
+    let badgeCls = "pill-muted";
+    if (fundVals.length > 0) {
+      const avgFund = fundVals.reduce((a, b) => a + b, 0) / fundVals.length;
+      if (avgFund >= 15) {
+        badgeTxt = "多头极度拥挤 · 防洗多";
+        badgeCls = "pill-risk";
+      } else if (avgFund >= 8) {
+        badgeTxt = "多头偏拥挤";
+        badgeCls = "pill-warn";
+      } else if (avgFund <= -15) {
+        badgeTxt = "空头极度拥挤 · 防逼空";
+        badgeCls = "pill-ok";
+      } else if (avgFund <= -5) {
+        badgeTxt = "空头偏拥挤";
+        badgeCls = "pill-info";
+      } else {
+        badgeTxt = "杠杆中性";
+        badgeCls = "pill-muted";
+      }
+    }
+
+    el.innerHTML = `
+      <div class="mag-crowd-metrics">${parts.join('<span class="muted">·</span>')}</div>
+      <span class="pill ${badgeCls}">${esc(badgeTxt)}</span>
+    `;
+  }
+
+  function renderLiqRhythm(hourlyArr) {
+    const barsEl = $("liq-rhythm-bars");
+    const stateEl = $("liq-rhythm-state");
+    if (!barsEl || !stateEl) return;
+    if (!Array.isArray(hourlyArr) || hourlyArr.length !== 24) {
+      barsEl.innerHTML = "";
+      stateEl.textContent = "无分时快照";
+      stateEl.className = "mono muted";
+      return;
+    }
+
+    let maxSide = 0;
+    let sum24 = 0;
+    let peakHr = 0;
+    hourlyArr.forEach((b) => {
+      const lu = Math.max(0, strictNum(b?.long_usd) ?? 0);
+      const su = Math.max(0, strictNum(b?.short_usd) ?? 0);
+      if (lu > maxSide) maxSide = lu;
+      if (su > maxSide) maxSide = su;
+      const tot = lu + su;
+      sum24 += tot;
+      if (tot > peakHr) peakHr = tot;
+    });
+
+    const last1 = hourlyArr[hourlyArr.length - 1] || {};
+    const last1Tot = (strictNum(last1.long_usd) ?? 0) + (strictNum(last1.short_usd) ?? 0);
+    const prev23Avg = (sum24 - last1Tot) / 23;
+    const last3Tot = hourlyArr
+      .slice(-3)
+      .reduce((acc, b) => acc + (strictNum(b?.long_usd) ?? 0) + (strictNum(b?.short_usd) ?? 0), 0);
+
+    if (sum24 <= 0) {
+      stateEl.textContent = "24h 无大额爆仓";
+      stateEl.className = "mono muted";
+    } else if (last1Tot >= 2_000_000 || (last1Tot >= 250_000 && prev23Avg > 0 && last1Tot >= prev23Avg * 2.0)) {
+      stateEl.textContent = `近1h放量 ${fmtCompact(last1Tot)}`;
+      stateEl.className = "mono warn";
+    } else if (last1Tot > 0) {
+      stateEl.textContent = `近1h清算 ${fmtCompact(last1Tot)}`;
+      stateEl.className = "mono";
+    } else if (last3Tot >= 2_000_000) {
+      stateEl.textContent = `近3h清算 ${fmtCompact(last3Tot)}`;
+      stateEl.className = "mono";
+    } else {
+      stateEl.textContent = `24h峰值 ${fmtCompact(peakHr)} · 当前平稳`;
+      stateEl.className = "mono muted";
+    }
+
+    const scale = maxSide > 0 ? maxSide : 1;
+    barsEl.innerHTML = hourlyArr
+      .map((b, idx) => {
+        const lu = Math.max(0, Number(b?.long_usd) || 0);
+        const su = Math.max(0, Number(b?.short_usd) || 0);
+        const hUp = lu > 0 ? Math.max(14, Math.round((lu / scale) * 100)) : 0;
+        const hDn = su > 0 ? Math.max(14, Math.round((su / scale) * 100)) : 0;
+        const tStart = fmtBarrageTime(Number(b?.ts) || 0);
+        const tip = `${tStart}起1h · 爆多 ${fmtCompact(lu)} / 爆空 ${fmtCompact(su)}`;
+        const nowCls = idx === hourlyArr.length - 1 ? " is-now" : "";
+        return `
+          <div class="lr-col${nowCls}" title="${esc(tip)}">
+            <div class="lr-half lr-half-up">${hUp > 0 ? `<div class="lr-bar lr-bar-long" style="height:${hUp}%;"></div>` : ""}</div>
+            <div class="lr-half lr-half-dn">${hDn > 0 ? `<div class="lr-bar lr-bar-short" style="height:${hDn}%;"></div>` : ""}</div>
+          </div>`;
+      })
+      .join("");
   }
 
   function renderLiqRail() {
@@ -3403,12 +3630,13 @@
       if (bL) bL.style.width = `${lPct.toFixed(1)}%`;
       if (bS) bS.style.width = `${sPct.toFixed(1)}%`;
       if (exEl) {
-        const exList = Array.isArray(winObj.top_exchanges) ? winObj.top_exchanges : [];
+        const exList = Array.isArray(winObj.top_exchanges) ? winObj.top_exchanges.slice(0, 3) : [];
         exEl.textContent = exList.length
-          ? `主战场分布：${exList.map((e) => `${e.ex} ${e.pct}%`).join(" · ")}`
+          ? `主战场：${exList.map((e) => `${e.ex} ${e.pct}%`).join(" · ")}`
           : `当前 ${war.liqWin} 窗口已统计为 0 笔`;
       }
     }
+    renderLiqRhythm(liq?.available ? liq.hourly_24h?.[scopeKey] : null);
 
     const feedEl = $("war-liq-feed");
     if (!feedEl) return;
@@ -3713,6 +3941,7 @@
     });
 
     syncAudioUi();
+    syncLiqBeepUi();
     syncDanmakuToggleUi();
     setRailTab(war.railTab);
     applyComposeSide(barrage.composeSide);
@@ -3721,6 +3950,30 @@
     if (savedNick && $("dm-nick")) {
       $("dm-nick").value = savedNick.slice(0, 16);
     }
+
+    $("btn-war-liq-beep")?.addEventListener("click", () => {
+      war.liqBeepOn = !war.liqBeepOn;
+      safeStoreSet("danclub_war_liq_beep", war.liqBeepOn ? "1" : "0");
+      syncLiqBeepUi();
+      if (war.liqBeepOn) playLiqRadarBeep(false, true);
+    });
+
+    // Silently unlock AudioContext on first user gesture so independent liquidation radar beeps work even when music is muted
+    const unlockRadarAudioOnce = () => {
+      if (war.liqBeepOn) {
+        try {
+          const Ctx = window.AudioContext || window.webkitAudioContext;
+          if (Ctx) {
+            if (!war.audioCtx) war.audioCtx = new Ctx();
+            if (war.audioCtx.state === "suspended") war.audioCtx.resume().catch(() => {});
+          }
+        } catch {}
+      }
+      document.removeEventListener("pointerdown", unlockRadarAudioOnce, true);
+      document.removeEventListener("keydown", unlockRadarAudioOnce, true);
+    };
+    document.addEventListener("pointerdown", unlockRadarAudioOnce, true);
+    document.addEventListener("keydown", unlockRadarAudioOnce, true);
 
     $("btn-war-danmaku")?.addEventListener("click", () => {
       war.danmakuOn = !war.danmakuOn;
@@ -3915,6 +4168,10 @@
   window.DanClubWarRoom = {
     init() {
       bindWarEvents();
+    },
+    setFlows(flowsData) {
+      war.flows = flowsData;
+      renderLeverageCrowding(war.activeCoin);
     },
     setData(whaleData) {
       war.data = whaleData;

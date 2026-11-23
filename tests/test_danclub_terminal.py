@@ -933,7 +933,25 @@ class TestExporterIntegrityAndHygiene(unittest.TestCase):
             self.assertEqual(liq["windows"]["24h"]["BTC"]["top_exchanges"][0]["pct"], 75.0)
             # Detail list still strictly >= $25K only (excludes the 4050 $1K small events!)
             self.assertEqual(len(liq["recent_events"]), 3)
+            # Hourly 24h rhythm buckets must have exactly 24 hours, exclude SOXL & future rows, and preserve exact totals
+            self.assertEqual(len(liq["hourly_24h"]["ALL"]), 24)
+            self.assertEqual(len(liq["hourly_24h"]["BTC"]), 24)
+            self.assertEqual(
+                sum(b["long_usd"] + b["short_usd"] for b in liq["hourly_24h"]["ALL"]),
+                2400000.0 + 4050000.0,
+            )
+            self.assertEqual(liq["hourly_24h"]["BTC"][-1]["short_usd"], 1500000.0)
             self.assertEqual(len(liq["wick_alerts"]), 1)
+
+            # 1b. _clean_bundle rejects corrupted or incomplete hourly_24h series cleanly without crashing
+            raw_b = exp.build_bundle(d)
+            raw_b["liquidations"]["hourly_24h"]["BTC"][5]["ts"] = "bad_ts"
+            raw_b["liquidations"]["hourly_24h"]["ETH"] = raw_b["liquidations"]["hourly_24h"]["ETH"][:23]
+            cleaned_b = syncer._clean_bundle(raw_b, blocklist_path=Path("/nonexistent"))
+            cleaned_hr = cleaned_b["whales"]["liquidations"]["hourly_24h"]
+            self.assertIn("ALL", cleaned_hr)
+            self.assertNotIn("BTC", cleaned_hr)
+            self.assertNotIn("ETH", cleaned_hr)
             self.assertEqual(liq["wick_alerts"][0]["kind"], "WICK_UP")
             self.assertNotIn("非投资建议", liq["wick_alerts"][0]["detail"])
 
@@ -976,7 +994,7 @@ class TestExporterIntegrityAndHygiene(unittest.TestCase):
         # 3. Verify V1 UI elements & strict ctVal guard in war_arena.js
         html = (ROOT / "site" / "index.html").read_text(encoding="utf-8")
         war_js = (ROOT / "site" / "assets" / "war_arena.js").read_text(encoding="utf-8")
-        for needle in ('id="war-liq-magnet"', 'id="war-rail-tabs"', 'id="war-rail-liq"', 'id="war-liq-feed"', 'id="liq-scope-group"'):
+        for needle in ('id="war-liq-magnet"', 'id="war-mag-crowd"', 'id="liq-rhythm-bars"', 'id="btn-war-liq-beep"', 'id="war-rail-tabs"', 'id="war-rail-liq"', 'id="war-liq-feed"', 'id="liq-scope-group"'):
             self.assertIn(needle, html)
         for needle in (
             "ensureOkxCtValMap",
@@ -989,6 +1007,9 @@ class TestExporterIntegrityAndHygiene(unittest.TestCase):
             "usedLiveIdx",
             "renderLiqMagnet",
             "renderLiqRail",
+            "renderLiqRhythm",
+            "renderLeverageCrowding",
+            "playLiqRadarBeep",
             "liveWhaleDistPct",
         ):
             self.assertIn(needle, war_js)

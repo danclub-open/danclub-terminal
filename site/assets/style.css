@@ -1529,10 +1529,20 @@ a:hover {
 /* Tactical War Room & Whale Radar */
 .war-arena-card:fullscreen {
   background: #070a10;
-  padding: 18px 22px;
+  padding: 16px 20px;
   border-radius: 0;
   border: 0;
   overflow: auto;
+}
+
+.war-arena-card:fullscreen .war-audio-bar,
+.war-arena-card:fullscreen .war-legend-row {
+  display: none;
+}
+
+.war-arena-card:fullscreen .war-chat-rail {
+  height: calc(100vh - 156px);
+  min-height: 460px;
 }
 
 .war-toolbar {
@@ -1609,15 +1619,19 @@ a:hover {
 .war-audio-prompt {
   position: absolute;
   left: 50%;
-  bottom: 12px;
+  bottom: 8px;
   transform: translateX(-50%);
   z-index: 6;
-  padding: 7px 14px;
+  padding: 5px 12px;
   border-radius: 999px;
-  border: 1px solid rgba(245, 158, 11, 0.6);
-  background: rgba(7, 10, 16, 0.86);
+  border: 1px solid rgba(245, 158, 11, 0.52);
+  background: rgba(7, 10, 16, 0.84);
   backdrop-filter: blur(6px);
   color: #fde68a;
+  font-size: 11px;
+  max-width: calc(100% - 20px);
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-size: 12px;
   font-weight: 700;
   white-space: nowrap;
@@ -2170,7 +2184,7 @@ a:hover {
 }
 
 .war-chat-rail {
-  height: 444px;
+  height: 472px;
   display: flex;
   flex-direction: column;
   border-radius: var(--radius-sm);
@@ -2344,6 +2358,108 @@ a:hover {
   flex-wrap: wrap;
   font-size: 11px;
   line-height: 1.35;
+}
+
+.mag-crowd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-top: 5px;
+  border-top: 1px dashed var(--line);
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text-2);
+}
+
+.mag-crowd-metrics {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* 24h Hourly Liquidation Rhythm Sparkbar (Up=Long Liq / Down=Short Liq) */
+.liq-rhythm-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-top: 2px;
+}
+
+.liq-rhythm-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 10px;
+}
+
+.liq-rhythm-bars {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  height: 30px;
+  padding: 2px 3px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+}
+
+.liq-rhythm-bars::after {
+  content: "";
+  position: absolute;
+  left: 3px;
+  right: 3px;
+  top: 50%;
+  height: 1px;
+  background: var(--line-strong);
+  pointer-events: none;
+}
+
+.lr-col {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  position: relative;
+  z-index: 1;
+}
+
+.lr-col.is-now {
+  background: var(--accent-soft);
+  border-radius: 2px;
+}
+
+.lr-half {
+  flex: 1 1 50%;
+  display: flex;
+  width: 100%;
+}
+
+.lr-half-up {
+  align-items: flex-end;
+}
+
+.lr-half-dn {
+  align-items: flex-start;
+}
+
+.lr-bar {
+  width: 100%;
+  border-radius: 1px;
+  min-height: 0;
+}
+
+.lr-bar-long {
+  background: #10b981;
+}
+
+.lr-bar-short {
+  background: #f43f5e;
 }
 
 /* Right Rail: CoinGlass 10-Exchange Liquidation Scoreboard + Typed Kill Feed */

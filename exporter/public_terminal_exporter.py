@@ -1844,6 +1844,7 @@ def export_liquidations(data_dir: Path, *, now_sec: int | None = None) -> dict[s
             "updated_at": 0,
             "exchanges_count": 0,
             "windows": {},
+            "hourly_24h": {},
             "recent_events": [],
             "wick_alerts": [],
         }
@@ -1871,6 +1872,18 @@ def export_liquidations(data_dir: Path, *, now_sec: int | None = None) -> dict[s
             GROUP BY coin, side_low, exchange
             """,
             (now - 3600, now),
+        )
+        win_start = now - 86400
+        hr_rows, ok_hr = _safe_query(
+            conn,
+            """
+            SELECT CAST((ts - ?) / 3600 AS INT) AS h_idx,
+                   coin, LOWER(side) AS side_low, SUM(usd) AS sum_usd
+            FROM liq_events
+            WHERE ts >= ? AND ts <= ? AND usd > 0 AND LOWER(side) IN ('long', 'short')
+            GROUP BY h_idx, coin, side_low
+            """,
+            (win_start, win_start, now),
         )
         # 2. Separate detail query ONLY for recent >= $25K large liquidation feed (exclude leveraged ETFs BEFORE LIMIT!)
         ignored_sorted = sorted(_IGNORED_LIQ_SYMS)
@@ -1909,6 +1922,7 @@ def export_liquidations(data_dir: Path, *, now_sec: int | None = None) -> dict[s
             "updated_at": 0,
             "exchanges_count": 0,
             "windows": {},
+            "hourly_24h": {},
             "recent_events": [],
             "wick_alerts": [],
         }
@@ -2010,6 +2024,41 @@ def export_liquidations(data_dir: Path, *, now_sec: int | None = None) -> dict[s
             if len(wick_alerts) >= 10:
                 break
 
+    hourly_out: dict[str, list[dict[str, Any]]] = {}
+    if ok_hr:
+        hourly_raw: dict[str, list[dict[str, float]]] = {
+            sc: [{"ts": win_start + h * 3600, "long_usd": 0.0, "short_usd": 0.0} for h in range(24)]
+            for sc in ("ALL", *tracked_coins)
+        }
+        for r in hr_rows:
+            h_idx = _int_or_zero(r.get("h_idx"))
+            if h_idx < 0:
+                continue
+            if h_idx > 23:
+                h_idx = 23
+            usd = _num(r.get("sum_usd"), 2)
+            side_low = str(r.get("side_low") or "").strip().lower()
+            if usd is None or usd <= 0 or side_low not in ("long", "short"):
+                continue
+            coin = re.sub(r"[^A-Z0-9:/_-]", "", str(r.get("coin") or "").strip().upper())[:16]
+            if not coin or coin in _IGNORED_LIQ_SYMS:
+                continue
+            scopes = ["ALL"]
+            if coin in tracked_coins:
+                scopes.append(coin)
+            fld = "long_usd" if side_low == "long" else "short_usd"
+            for sc in scopes:
+                hourly_raw[sc][h_idx][fld] += usd
+        for sc, arr in hourly_raw.items():
+            hourly_out[sc] = [
+                {
+                    "ts": int(b["ts"]),
+                    "long_usd": round(b["long_usd"], 0),
+                    "short_usd": round(b["short_usd"], 0),
+                }
+                for b in arr
+            ]
+
     ex_cnt = len(distinct_ex)
     return {
         "available": True,
@@ -2017,6 +2066,7 @@ def export_liquidations(data_dir: Path, *, now_sec: int | None = None) -> dict[s
         "updated_at": latest_ts,
         "exchanges_count": ex_cnt,
         "windows": windows_out,
+        "hourly_24h": hourly_out,
         "recent_events": recent_events,
         "wick_alerts": wick_alerts,
     }

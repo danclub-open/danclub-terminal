@@ -249,6 +249,7 @@
                 <button class="seg-btn" data-coin="SOL" type="button">SOL</button>
                 <button class="seg-btn" data-coin="HYPE" type="button">HYPE</button>
               </div>
+              <button class="btn btn-compact btn-toggle-active" id="btn-war-liq-beep" type="button" aria-pressed="true" title="大额强平（≥$10万）或实盘旗舰临界强平（<3%）独立雷达提示音，静音战歌时依然有效">强平音 开</button>
               <button class="btn btn-compact btn-danmaku-toggle" id="btn-war-danmaku" type="button" title="开启或隐藏战场飞屏弹幕">弹幕 关</button>
               <button class="btn btn-compact" id="btn-war-poster" type="button">导出战报图</button>
               <button class="btn btn-compact btn-accent-ghost" id="btn-war-fullscreen" type="button">副屏全屏</button>
@@ -328,6 +329,9 @@
                   <span class="ok" id="war-mag-long">⬇ 多头强平墙：加载中…</span>
                   <span class="risk" id="war-mag-short">⬆ 空头强平墙：加载中…</span>
                 </div>
+                <div class="mag-crowd mono small" id="war-mag-crowd">
+                  <span class="muted">杠杆拥挤度：加载中…</span>
+                </div>
               </div>
             </div>
 
@@ -367,6 +371,13 @@
                   <div class="war-rail-pulse-track">
                     <div class="war-bar-long" id="liq-bar-long" style="width:50%;"></div>
                     <div class="war-bar-short" id="liq-bar-short" style="width:50%;"></div>
+                  </div>
+                  <div class="liq-rhythm-wrap" id="liq-rhythm-wrap">
+                    <div class="liq-rhythm-head">
+                      <span class="muted">24h 爆仓节奏（上绿爆多 / 下红爆空）</span>
+                      <span class="mono" id="liq-rhythm-state">--</span>
+                    </div>
+                    <div class="liq-rhythm-bars" id="liq-rhythm-bars" aria-label="24小时每小时爆仓分布"></div>
                   </div>
                   <div class="liq-ex-row mono" id="liq-ex-row">同步全网交易所构成…</div>
                 </div>

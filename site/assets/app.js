@@ -1785,11 +1785,11 @@
     const endpoints = [
       { file: "index.json", desc: "元信息、更新时间与全部接口索引" },
       { file: "overview.json", desc: "市场态势、异常雷达、底部仪表盘、宏观回撤、矿机与 QDII" },
-      { file: "whales.json", desc: "实体去重聪明钱 vs 反指巨鲸多空背离与顶级旗舰仓位快照" },
+      { file: "whales.json", desc: "实盘巨鲸多空背离、清算引力墙、CoinGlass 全网爆仓汇总与 24h 分时节奏" },
       { file: "arb.json", desc: "海力士/黄金价差带、中证贴水 2706 期限表、四所充提安全" },
       { file: "flows.json", desc: "BTC/ETH 现货 ETF 矩阵、MSTR mNAV、Hyperliquid、币安双维雷达" },
       { file: "labs.json", desc: "3 套模拟定投对比净值与在期交易所活动清单" },
-      { file: "feed.json", desc: "去重脱敏公开快讯、交易所公告与每日客观研判" },
+      { file: "feed.json", desc: "去重脱敏多源实时快讯（含英文自动译中文原题对照）、交易所公告与每日研判" },
     ];
     $("api-list").innerHTML = endpoints
       .map(
@@ -1943,6 +1943,7 @@
     state.arb = arb;
     state.flows = flows;
     state.labs = labs;
+    window.DanClubWarRoom?.setFlows?.(flows ?? null);
     if (whales) window.DanClubWarRoom?.setData(whales);
 
     // Seed crypto ribbon immediately from snapshot before first live WS/HTTP response lands
