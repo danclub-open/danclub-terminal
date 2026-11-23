@@ -2184,7 +2184,7 @@ a:hover {
 }
 
 .war-chat-rail {
-  height: 472px;
+  height: 479px;
   display: flex;
   flex-direction: column;
   border-radius: var(--radius-sm);
@@ -2394,6 +2394,7 @@ a:hover {
   justify-content: space-between;
   gap: 6px;
   font-size: 10px;
+  white-space: nowrap;
 }
 
 .liq-rhythm-bars {

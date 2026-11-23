@@ -3568,7 +3568,7 @@
       stateEl.textContent = `近3h清算 ${fmtCompact(last3Tot)}`;
       stateEl.className = "mono";
     } else {
-      stateEl.textContent = `24h峰值 ${fmtCompact(peakHr)} · 当前平稳`;
+      stateEl.textContent = `峰值 ${fmtCompact(peakHr)} · 平稳`;
       stateEl.className = "mono muted";
     }
 
