@@ -257,6 +257,8 @@
     COIN: "Coinbase COIN",
     CRCL: "Circle CRCL",
     SOXL: "半导体3x SOXL",
+    MU: "美光 MU",
+    SPCX: "SpaceX",
     ANT: "Anthropic",
   };
 
@@ -4347,7 +4349,6 @@
         if (war.soundOn) stopAnthem(true);
       } else if (war.running) {
         if (war.soundOn && war.pausedByHidden) playCurrentAnthem(false);
-        pollBarrage();
       }
     });
 
