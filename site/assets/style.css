@@ -1794,6 +1794,24 @@ a:hover {
   text-decoration: none;
 }
 
+.btn-x-profile {
+  border-color: var(--line-strong);
+  background: var(--surface-2);
+  color: var(--text);
+  font-weight: 700;
+}
+
+.btn-x-profile:hover {
+  border-color: var(--text);
+  background: var(--text);
+  color: var(--bg);
+  text-decoration: none;
+}
+
+.btn-x-profile svg {
+  flex: 0 0 auto;
+}
+
 .sess-bstock {
   background: rgba(56, 189, 248, 0.16) !important;
   color: var(--accent) !important;
