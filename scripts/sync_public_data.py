@@ -351,7 +351,7 @@ def fetch_eqn_news_and_earn(timeout: int = 8) -> tuple[list[dict[str, Any]], lis
                 "level": "major" if ("main" in chs or "major" in chs or "tfmoves" in chs) else "normal",
                 "cat_code": cat_code,
                 "category": cat_label,
-                "source": f"EQN · {src_name}" if "方程式" not in src_name else src_name,
+                "source": src_name,
                 "headline": clean_head[:180],
                 "impact_label": f"涉及 {' / '.join(coins)}" if coins else "",
                 "impact_tone": tone,
@@ -392,7 +392,7 @@ def fetch_eqn_news_and_earn(timeout: int = 8) -> tuple[list[dict[str, Any]], lis
                     "title": clean_head[:105],
                     "reward": reward_m.group(0) if reward_m else "",
                     "window": f"发布于 {dt_str[5:16]} BJT",
-                    "summary": clean_head[105:240].strip() if len(clean_head) > 105 else f"来源：EQN {src_name}（点击查看原文规则）",
+                    "summary": clean_head[105:240].strip() if len(clean_head) > 105 else f"来源：{src_name}（点击查看原文规则）",
                     "url": raw_url,
                     "created_at": ts_sec,
                 })
