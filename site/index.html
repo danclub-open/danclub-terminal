@@ -239,8 +239,8 @@
         <article class="card war-arena-card" id="war-arena-card">
           <div class="card-head wrap-head">
             <div>
-              <p class="eyebrow">LIVE AIR-COMBAT RADAR · REAL WHALE FLAGSHIPS</p>
-              <h2>多空空战战情室（绿军多头 vs 红军空头）</h2>
+              <p class="eyebrow">LIVE LIQUIDATION RADAR · REAL WHALE FLAGSHIPS</p>
+              <h2>多空爆仓战情室（绿军多头 vs 红军空头）</h2>
             </div>
             <div class="war-toolbar">
               <div class="seg-group seg-sm" id="war-coin-tabs">
@@ -249,7 +249,7 @@
                 <button class="seg-btn" data-coin="SOL" type="button">SOL</button>
                 <button class="seg-btn" data-coin="HYPE" type="button">HYPE</button>
               </div>
-              <button class="btn btn-compact btn-danmaku-toggle active" id="btn-war-danmaku" type="button" title="开启或隐藏战场飞屏弹幕">弹幕 开</button>
+              <button class="btn btn-compact btn-danmaku-toggle" id="btn-war-danmaku" type="button" title="开启或隐藏战场飞屏弹幕">弹幕 关</button>
               <button class="btn btn-compact" id="btn-war-poster" type="button">导出战报图</button>
               <button class="btn btn-compact btn-accent-ghost" id="btn-war-fullscreen" type="button">副屏全屏</button>
             </div>
@@ -293,7 +293,7 @@
             <span class="mono small muted" id="war-ws-status">连接中…</span>
           </div>
 
-          <!-- 60fps HiDPI Tactical Air-Combat Stage + Live Danmaku & Frontline Message Rail -->
+          <!-- 60fps HiDPI Tactical Liquidation & Whale Stage + Real-Time Loss / Kill Feed Rail -->
           <div class="war-stage-layout">
             <div class="war-stage-main">
               <div class="war-canvas-wrap">
@@ -304,84 +304,153 @@
                 <div class="chart-tooltip" id="war-canvas-tip"></div>
               </div>
 
-              <!-- Quick Danmaku & Shoutbox Launcher -->
-              <form class="war-danmaku-bar" id="dm-form" autocomplete="off">
-                <div class="dm-side-group" id="dm-side-group" role="group" aria-label="选择发言阵营">
-                  <button class="dm-side-btn active is-long" data-side="LONG" type="button">多军</button>
-                  <button class="dm-side-btn is-short" data-side="SHORT" type="button">空军</button>
-                  <button class="dm-side-btn is-neutral" data-side="NEUTRAL" type="button">观望</button>
+              <!-- Real Verified Single-Venue Whale Liquidation Magnet Ruler -->
+              <div class="war-liq-magnet" id="war-liq-magnet" aria-label="实盘旗舰清算引力标尺">
+                <div class="mag-head">
+                  <div class="mag-title-group">
+                    <span class="mag-title">实盘旗舰清算引力标尺</span>
+                    <span class="pill pill-muted mag-src">单所精确强平价 · ±25%</span>
+                  </div>
+                  <div class="mag-mark mono" id="war-mag-mark">BTC --</div>
+                  <span class="pill pill-muted mag-alert" id="war-mag-alert">监测中</span>
                 </div>
-                <input
-                  class="dm-nick-input"
-                  id="dm-nick"
-                  type="text"
-                  maxlength="16"
-                  placeholder="昵称(选填)"
-                  aria-label="发言昵称"
-                />
-                <input
-                  class="dm-text-input"
-                  id="dm-input"
-                  type="text"
-                  maxlength="80"
-                  placeholder="发条弹幕助威或留盘面观点（回车直飞战场）…"
-                  aria-label="弹幕与留言内容"
-                />
-                <button class="btn btn-compact dm-send-btn is-long" id="btn-dm-send" type="submit">
-                  发射弹幕
-                </button>
-              </form>
-              <div class="dm-feedback small" id="dm-feedback" aria-live="polite"></div>
+                <div class="mag-track-wrap">
+                  <span class="mag-axis-lbl mono">-25%</span>
+                  <div class="mag-track" id="war-mag-track">
+                    <div class="mag-half mag-half-long"></div>
+                    <div class="mag-half mag-half-short"></div>
+                    <div class="mag-center-pin" title="当前实时标价"></div>
+                    <div class="mag-ticks" id="war-mag-ticks"></div>
+                  </div>
+                  <span class="mag-axis-lbl mono">+25%</span>
+                </div>
+                <div class="mag-foot mono small">
+                  <span class="ok" id="war-mag-long">⬇ 多头强平墙：加载中…</span>
+                  <span class="risk" id="war-mag-short">⬆ 空头强平墙：加载中…</span>
+                </div>
+              </div>
             </div>
 
-            <!-- Live Frontline Message Wall -->
-            <aside class="war-chat-rail" aria-label="前线留言墙">
+            <!-- Right Tactical Rail: Default Pure Trading Real-Time Loss & Kill Feed | Optional Frontline Chat -->
+            <aside class="war-chat-rail" aria-label="实时战损与战术情报台">
               <div class="war-rail-head">
-                <div class="war-rail-title">
-                  <span>前线留言墙</span>
-                  <span class="mono small muted" id="dm-count-badge">0 条</span>
+                <div class="seg-group seg-xs" id="war-rail-tabs" role="tablist" aria-label="情报台视图切换">
+                  <button class="seg-btn active" data-rail="liq" type="button" role="tab" aria-selected="true">实时战损</button>
+                  <button class="seg-btn" data-rail="chat" type="button" role="tab" aria-selected="false">前线弹幕 <span class="mono" id="dm-count-badge">0</span></button>
                 </div>
-                <div class="seg-group seg-xs" id="dm-filter-group">
+                <div class="seg-group seg-xs" id="liq-win-group">
+                  <button class="seg-btn active" data-win="24h" type="button">24h</button>
+                  <button class="seg-btn" data-win="1h" type="button">1h</button>
+                </div>
+                <div class="seg-group seg-xs" id="dm-filter-group" hidden>
                   <button class="seg-btn active" data-side="ALL" type="button">全</button>
                   <button class="seg-btn" data-side="LONG" type="button">多</button>
                   <button class="seg-btn" data-side="SHORT" type="button">空</button>
                 </div>
               </div>
-              <div class="war-rail-pulse">
-                <div class="war-rail-pulse-meta small mono">
-                  <span class="muted">24h 弹幕声量</span>
-                  <span>
-                    <b class="ok" id="dm-pulse-long">多 50%</b>
-                    <span class="muted">·</span>
-                    <b class="risk" id="dm-pulse-short">空 50%</b>
-                  </span>
+
+              <!-- Pane 1 (Default): CoinGlass 10-Exchange Liquidation Scoreboard + Typed Kill & Whale Move Feed -->
+              <div class="war-rail-pane" id="war-rail-liq">
+                <div class="liq-board">
+                  <div class="liq-board-top">
+                    <span class="liq-board-src mono" id="liq-board-src">CoinGlass 全网爆仓</span>
+                    <div class="seg-group seg-xs" id="liq-scope-group">
+                      <button class="seg-btn active" data-scope="COIN" id="liq-scope-coin-btn" type="button">BTC</button>
+                      <button class="seg-btn" data-scope="ALL" type="button">全网</button>
+                    </div>
+                  </div>
+                  <div class="liq-board-nums mono">
+                    <span class="ok">爆多 <b id="liq-long-val">--</b></span>
+                    <span class="muted small" id="liq-total-cnt">-- 笔</span>
+                    <span class="risk"><b id="liq-short-val">--</b> 爆空</span>
+                  </div>
+                  <div class="war-rail-pulse-track">
+                    <div class="war-bar-long" id="liq-bar-long" style="width:50%;"></div>
+                    <div class="war-bar-short" id="liq-bar-short" style="width:50%;"></div>
+                  </div>
+                  <div class="liq-ex-row mono" id="liq-ex-row">同步全网交易所构成…</div>
                 </div>
-                <div class="war-rail-pulse-track">
-                  <div class="war-bar-long" id="dm-pulse-bar-long" style="width:50%;"></div>
-                  <div class="war-bar-short" id="dm-pulse-bar-short" style="width:50%;"></div>
+                <div class="liq-filter-bar" id="liq-feed-filter">
+                  <button class="seg-btn active" data-kind="ALL" type="button">全部</button>
+                  <button class="seg-btn" data-kind="LIQ" type="button">强平单</button>
+                  <button class="seg-btn" data-kind="WHALE" type="button">巨鲸调仓</button>
+                  <button class="seg-btn" data-kind="WICK" type="button">插针预警</button>
+                </div>
+                <div class="war-msg-list" id="war-liq-feed">
+                  <div class="dm-empty">正在载入 CoinGlass 全网爆仓与实盘巨鲸异动…</div>
+                </div>
+                <div class="war-rail-foot small muted">
+                  <span class="dm-sync-dot" id="liq-ws-dot"></span>
+                  <span id="liq-ws-status">接入 OKX/BN 实时强平流…</span>
+                  <span class="dm-foot-hint mono">快照≥$2.5万 · 实时≥$5千</span>
                 </div>
               </div>
-              <div class="war-msg-list" id="dm-msg-list">
-                <div class="dm-pin">
-                  <span class="dm-badge dm-badge-sys">战情广播</span>
-                  <span>选择多/空阵营，输入即飞屏弹幕并同步全网留言；点击任意留言可重放弹幕。</span>
+
+              <!-- Pane 2 (Optional): Live Frontline Message Wall + Compact Input -->
+              <div class="war-rail-pane" id="war-rail-chat" hidden>
+                <div class="war-rail-pulse">
+                  <div class="war-rail-pulse-meta small mono">
+                    <span class="muted">24h 弹幕声量</span>
+                    <span>
+                      <b class="ok" id="dm-pulse-long">多 50%</b>
+                      <span class="muted">·</span>
+                      <b class="risk" id="dm-pulse-short">空 50%</b>
+                    </span>
+                  </div>
+                  <div class="war-rail-pulse-track">
+                    <div class="war-bar-long" id="dm-pulse-bar-long" style="width:50%;"></div>
+                    <div class="war-bar-short" id="dm-pulse-bar-short" style="width:50%;"></div>
+                  </div>
                 </div>
-              </div>
-              <div class="war-rail-foot small muted">
-                <span class="dm-sync-dot" id="dm-sync-dot"></span>
-                <span id="dm-sync-status">接入前线弹幕信道…</span>
-                <span class="dm-foot-hint">文明交流 · 禁外链</span>
+                <div class="war-msg-list" id="dm-msg-list">
+                  <div class="dm-pin">
+                    <span class="dm-badge dm-badge-sys">前线弹幕</span>
+                    <span>支持匿名留盘面观点；点击任意留言可重放弹幕。</span>
+                  </div>
+                </div>
+                <form class="war-chat-form" id="dm-form" autocomplete="off">
+                  <div class="war-chat-form-row">
+                    <div class="dm-side-group" id="dm-side-group" role="group" aria-label="选择发言阵营">
+                      <button class="dm-side-btn active is-long" data-side="LONG" type="button">多</button>
+                      <button class="dm-side-btn is-short" data-side="SHORT" type="button">空</button>
+                      <button class="dm-side-btn is-neutral" data-side="NEUTRAL" type="button">观</button>
+                    </div>
+                    <input
+                      class="dm-nick-input"
+                      id="dm-nick"
+                      type="text"
+                      maxlength="16"
+                      placeholder="昵称(选)"
+                      aria-label="发言昵称"
+                    />
+                  </div>
+                  <div class="war-chat-form-row">
+                    <input
+                      class="dm-text-input"
+                      id="dm-input"
+                      type="text"
+                      maxlength="80"
+                      placeholder="输入盘面观点回车发送…"
+                      aria-label="弹幕与留言内容"
+                    />
+                    <button class="btn btn-compact dm-send-btn is-long" id="btn-dm-send" type="submit">发送</button>
+                  </div>
+                </form>
+                <div class="dm-feedback small" id="dm-feedback" aria-live="polite"></div>
+                <div class="war-rail-foot small muted">
+                  <span class="dm-sync-dot" id="dm-sync-dot"></span>
+                  <span id="dm-sync-status">接入前线弹幕信道…</span>
+                  <span class="dm-foot-hint">文明交流</span>
+                </div>
               </div>
             </aside>
           </div>
 
           <div class="war-legend-row">
-            <span><b class="ok">光束</b> &lt;$5万</span>
-            <span><b class="ok">轻型战机</b> ≥$5万</span>
-            <span><b class="ok">重型截击机</b> ≥$25万</span>
-            <span><b class="warn">隐形轰炸机</b> ≥$100万</span>
-            <span><b class="warn">金环 [S]</b> S/A级聪明钱母舰</span>
-            <span><b style="color:#a855f7;">紫环 [C]</b> C级反指巨鲸母舰（点击母舰查持仓）</span>
+            <span><b class="ok">主动成交战机</b> &lt;$5万光束 / ≥$5万轻机 / ≥$25万重机 / ≥$100万轰炸</span>
+            <span><b class="warn">琥珀爆环</b> 实时强平空袭（OKX/BN 实盘爆仓）</span>
+            <span><b class="risk">母舰血条</b> 单所精确距强平%（&lt;5% 红血闪烁 · 点击查持仓）</span>
+            <span><b style="color:#a855f7;">金环[S] / 紫环[C]</b> 聪明钱 vs 反指巨鲸</span>
           </div>
         </article>
 

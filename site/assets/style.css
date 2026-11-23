@@ -2170,7 +2170,7 @@ a:hover {
 }
 
 .war-chat-rail {
-  height: 404px;
+  height: 444px;
   display: flex;
   flex-direction: column;
   border-radius: var(--radius-sm);
@@ -2178,6 +2178,362 @@ a:hover {
   background: var(--surface-2);
   overflow: hidden;
   min-width: 0;
+}
+
+.war-rail-pane {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.war-rail-pane[hidden] {
+  display: none;
+}
+
+/* Real Verified Single-Venue Whale Liquidation Magnet Ruler */
+.war-liq-magnet {
+  margin-top: 8px;
+  padding: 8px 11px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--line-strong);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.mag-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.mag-title-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.mag-title {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.mag-src {
+  font-size: 10px;
+}
+
+.mag-mark {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.mag-alert {
+  font-size: 10px;
+}
+
+.mag-track-wrap {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.mag-axis-lbl {
+  font-size: 10px;
+  color: var(--faint);
+  flex: 0 0 auto;
+}
+
+.mag-track {
+  position: relative;
+  flex: 1 1 auto;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  overflow: visible;
+}
+
+.mag-half {
+  position: absolute;
+  top: 5px;
+  height: 4px;
+  pointer-events: none;
+}
+
+.mag-half-long {
+  left: 4px;
+  right: 50%;
+  border-radius: 999px 0 0 999px;
+  background: linear-gradient(90deg, rgba(16, 185, 129, 0.14), rgba(16, 185, 129, 0.45));
+}
+
+.mag-half-short {
+  left: 50%;
+  right: 4px;
+  border-radius: 0 999px 999px 0;
+  background: linear-gradient(90deg, rgba(244, 63, 94, 0.45), rgba(244, 63, 94, 0.14));
+}
+
+.mag-center-pin {
+  position: absolute;
+  left: 50%;
+  top: -1px;
+  bottom: -1px;
+  width: 3px;
+  transform: translateX(-50%);
+  border-radius: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.75);
+  z-index: 3;
+}
+
+.mag-ticks {
+  position: absolute;
+  inset: 0;
+}
+
+.mag-tick {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 7px;
+  height: 12px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  border-radius: 2px;
+  cursor: pointer;
+  z-index: 4;
+  transition: transform 0.12s ease;
+}
+
+.mag-tick:hover {
+  transform: translate(-50%, -50%) scale(1.25);
+  z-index: 6;
+}
+
+.mag-tick.is-long {
+  background: #10b981;
+  box-shadow: 0 0 6px rgba(16, 185, 129, 0.6);
+}
+
+.mag-tick.is-short {
+  background: #f43f5e;
+  box-shadow: 0 0 6px rgba(244, 63, 94, 0.6);
+}
+
+.mag-tick.is-danger {
+  background: #f59e0b;
+  border-color: #ffffff;
+  box-shadow: 0 0 9px rgba(245, 158, 11, 0.9);
+}
+
+.mag-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+/* Right Rail: CoinGlass 10-Exchange Liquidation Scoreboard + Typed Kill Feed */
+.liq-board {
+  padding: 8px 10px 7px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex: 0 0 auto;
+}
+
+.liq-board-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.liq-board-src {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.liq-board-nums {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 11.5px;
+}
+
+.liq-ex-row {
+  font-size: 10.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.liq-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+  flex: 0 0 auto;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.liq-filter-bar::-webkit-scrollbar {
+  display: none;
+}
+
+.liq-filter-bar .seg-btn {
+  padding: 2px 7px;
+  font-size: 11px;
+  height: 22px;
+}
+
+.liq-item {
+  padding: 6px 8px;
+  border-radius: 5px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-left-width: 2.5px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.liq-item.kind-liq-long { border-left-color: #10b981; }
+.liq-item.kind-liq-short { border-left-color: #f43f5e; }
+.liq-item.kind-wick { border-left-color: #f59e0b; }
+.liq-item.kind-whale {
+  border-left-color: #38bdf8;
+  cursor: pointer;
+}
+
+.liq-item.kind-whale:hover {
+  border-color: var(--accent-border);
+  background: var(--surface-hover);
+}
+
+.liq-item-top {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  min-width: 0;
+}
+
+.liq-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 5px;
+  height: 16px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 700;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.liq-tag-long { background: rgba(16, 185, 129, 0.16); color: var(--ok); }
+.liq-tag-short { background: rgba(244, 63, 94, 0.16); color: var(--risk); }
+.liq-tag-wick { background: rgba(245, 158, 11, 0.18); color: var(--warn); }
+.liq-tag-whale { background: var(--accent-soft); color: var(--accent); }
+.liq-tag-live { background: #f59e0b; color: #090d15; font-weight: 800; }
+
+.liq-ex-pill {
+  padding: 0 4px;
+  height: 16px;
+  line-height: 16px;
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-2);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  flex: 0 0 auto;
+}
+
+.liq-coin-lbl {
+  font-family: var(--mono);
+  font-weight: 700;
+  color: var(--text);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.liq-ts {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--faint);
+  flex: 0 0 auto;
+}
+
+.liq-item-body {
+  font-size: 11.5px;
+  color: var(--text-2);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.liq-item-body b {
+  color: var(--text);
+  font-family: var(--mono);
+}
+
+/* Compact Chat Form inside Rail Tab #2 */
+.war-chat-form {
+  padding: 6px 8px;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex: 0 0 auto;
+}
+
+.war-chat-form-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.war-chat-form .dm-nick-input {
+  flex: 1 1 60px;
+  width: auto;
+  height: 26px;
+  font-size: 11.5px;
+}
+
+.war-chat-form .dm-text-input {
+  flex: 1 1 auto;
+  height: 28px;
+  font-size: 12px;
 }
 
 .war-rail-head {
@@ -2475,7 +2831,7 @@ a:hover {
 @media (max-width: 1080px) {
   .kpi-grid-4, .spread-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .grid-2, .grid-2-wide, .dca-strat-grid, .promo-grid, .war-factions-grid, .war-stage-layout { grid-template-columns: 1fr; }
-  .war-chat-rail { height: 270px; }
+  .war-chat-rail { height: 400px; }
   .hide-md { display: none; }
 }
 

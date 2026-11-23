@@ -193,6 +193,8 @@ def empty_whales_payload() -> dict[str, Any]:
         "cohorts": {},
         "series": {},
         "flagships": [],
+        "liq_magnets": {},
+        "recent_moves": [],
     }
 
 
@@ -326,6 +328,7 @@ def export_whales(db_path: Path, *, max_flagships: int = 40) -> dict[str, Any]:
         total_active_notional = 0.0
         x_linked_count = 0
         full_cov_entities = 0
+        latest_coin_px: dict[str, float] = {}
 
         if latest_pos_ts > 0:
             cur_pos_rows = _safe_query(
@@ -340,7 +343,6 @@ def export_whales(db_path: Path, *, max_flagships: int = 40) -> dict[str, Any]:
 
             # Aggregate ALL positions for true entity net_usd & total_notional (matching historical SQL!)
             entities: dict[str, dict[str, Any]] = {}
-            latest_coin_px: dict[str, float] = {}
             for r in cur_pos_rows:
                 eid = str(r.get("entity_cluster_id") or "")
                 coin = str(r.get("coin") or "")
@@ -726,8 +728,16 @@ def export_whales(db_path: Path, *, max_flagships: int = 40) -> dict[str, Any]:
                                     pos["lev"] = None
                                 ltypes = det["lev_types"]
                                 pos["lev_type"] = next(iter(ltypes)) if len(ltypes) == 1 else ("mixed" if len(ltypes) > 1 else "")
+                                pos["liq_dist_pct"] = None
+                                if pos["liq_px"] and mpx_raw and float(mpx_raw) > 0:
+                                    m_f = float(mpx_raw)
+                                    lq_f = float(pos["liq_px"])
+                                    dp = ((m_f - lq_f) / m_f) * 100.0 if pos["side"] == "LONG" else ((lq_f - m_f) / m_f) * 100.0
+                                    if 0.0 < dp <= 60.0:
+                                        pos["liq_dist_pct"] = round(dp, 2)
                             else:
                                 pos["liq_px"] = None
+                                pos["liq_dist_pct"] = None
                                 pos["lev"] = None
                                 pos["lev_type"] = ""
                             pos["legs"] = det["legs"]
@@ -735,6 +745,7 @@ def export_whales(db_path: Path, *, max_flagships: int = 40) -> dict[str, Any]:
                         else:
                             pos["entry_px"] = None
                             pos["liq_px"] = None
+                            pos["liq_dist_pct"] = None
                             pos["upnl"] = None
                             pos["lev"] = None
                             pos["lev_type"] = ""
@@ -809,6 +820,81 @@ def export_whales(db_path: Path, *, max_flagships: int = 40) -> dict[str, Any]:
                         "history": chart_traj,
                     })
 
+        # Build verified single-venue liquidation magnet summaries per tracked war coin
+        liq_magnets: dict[str, Any] = {}
+        for m_coin in ("BTC", "ETH", "SOL", "HYPE"):
+            m_px = latest_coin_px.get(m_coin)
+            if not m_px or float(m_px) <= 0:
+                continue
+            m_px_f = float(m_px)
+            long_targets: list[dict[str, Any]] = []
+            short_targets: list[dict[str, Any]] = []
+            for fl in flagships:
+                for p in fl.get("positions") or []:
+                    if p.get("coin") != m_coin:
+                        continue
+                    lq = p.get("liq_px")
+                    dp = p.get("liq_dist_pct")
+                    if lq is None or dp is None or dp <= 0 or dp > 25.0:
+                        continue
+                    entry = {
+                        "id": fl["id"],
+                        "display": fl["display"],
+                        "tier_code": fl["tier_code"],
+                        "liq_px": lq,
+                        "dist_pct": dp,
+                        "usd": p["usd"],
+                        "lev": p.get("lev"),
+                        "venue": (p.get("venues") or ["HL"])[0],
+                    }
+                    if p["side"] == "LONG":
+                        long_targets.append(entry)
+                    else:
+                        short_targets.append(entry)
+
+            long_targets.sort(key=lambda x: (x["dist_pct"], -x["usd"]))
+            short_targets.sort(key=lambda x: (x["dist_pct"], -x["usd"]))
+
+            def _summarize_wall(tlist: list[dict[str, Any]]) -> dict[str, Any]:
+                w10 = [t for t in tlist if t["dist_pct"] <= 10.0]
+                return {
+                    "nearest_px": tlist[0]["liq_px"] if tlist else None,
+                    "nearest_dist_pct": tlist[0]["dist_pct"] if tlist else None,
+                    "within_10pct_usd": round(sum(t["usd"] for t in w10), 0),
+                    "within_10pct_count": len(w10),
+                    "within_25pct_usd": round(sum(t["usd"] for t in tlist), 0),
+                    "within_25pct_count": len(tlist),
+                    "targets": tlist[:6],
+                }
+
+            liq_magnets[m_coin] = {
+                "mark_px": round(m_px_f, 4 if m_px_f < 10 else 2),
+                "source": "实盘单所旗舰精确强平价",
+                "long_wall": _summarize_wall(long_targets),
+                "short_wall": _summarize_wall(short_targets),
+            }
+
+        # Build deterministic recent flagship position moves (>= $1M constant-price quantity delta)
+        recent_moves: list[dict[str, Any]] = []
+        for fl in flagships:
+            act = fl.get("action")
+            d_usd = fl.get("delta_usd")
+            if act in ("反手", "加仓", "减仓") and d_usd is not None and abs(float(d_usd)) >= 1_000_000:
+                recent_moves.append({
+                    "id": fl["id"],
+                    "display": fl["display"],
+                    "tier_code": fl["tier_code"],
+                    "tier_label": fl["tier_label"],
+                    "coin": fl["primary_coin"],
+                    "side": fl["primary_side"],
+                    "action": act,
+                    "delta_usd": d_usd,
+                    "delta_window_h": fl.get("delta_window_h"),
+                    "net_usd": fl["net_usd"],
+                    "ts": updated_at,
+                })
+        recent_moves.sort(key=lambda m: (0 if m["action"] == "反手" else 1, -abs(float(m["delta_usd"]))))
+
         cov_pct = round((full_cov_entities / len(flagships)) * 100.0, 1) if flagships else 0.0
         return {
             "available": bool(cohorts_by_coin or flagships),
@@ -824,6 +910,8 @@ def export_whales(db_path: Path, *, max_flagships: int = 40) -> dict[str, Any]:
             "cohorts": cohorts_by_coin,
             "series": series_by_coin,
             "flagships": flagships,
+            "liq_magnets": liq_magnets,
+            "recent_moves": recent_moves[:15],
         }
     finally:
         conn.close()

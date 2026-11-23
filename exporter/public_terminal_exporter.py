@@ -1750,6 +1750,278 @@ def _synthesize_regime_and_signals(
     return regime, signals[:5]
 
 
+_LIQ_EXCHANGE_MAP: dict[str, tuple[str, str]] = {
+    "hyperliquid": ("Hyperliquid", "HL"),
+    "binance": ("Binance", "BN"),
+    "okx": ("OKX", "OKX"),
+    "bybit": ("Bybit", "Bybit"),
+    "bitget": ("Bitget", "BG"),
+    "gate": ("Gate", "Gate"),
+    "htx": ("HTX", "HTX"),
+    "aster": ("Aster", "Aster"),
+    "lighter": ("Lighter", "Lighter"),
+    "extended": ("Extended", "Ext"),
+    "coinex": ("CoinEx", "CoinEx"),
+    "dydx": ("dYdX", "dYdX"),
+}
+
+_IGNORED_LIQ_SYMS: frozenset[str] = frozenset({
+    "SOXL", "SOXS", "TQQQ", "SQQQ", "INTW", "MVLL", "KORU", "MUU", "SNXX",
+    "NVDL", "NVDS", "TSLL", "TSLS", "CONL", "MSTU", "MSTX", "MSTZ", "ETHU", "BITX",
+})
+
+
+def _norm_liq_exchange(raw: str) -> tuple[str, str]:
+    s = re.sub(r"^CG:", "", str(raw or "").strip(), flags=re.IGNORECASE).strip()
+    low = s.lower()
+    if low in _LIQ_EXCHANGE_MAP:
+        return _LIQ_EXCHANGE_MAP[low]
+    clean = re.sub(r"[^A-Za-z0-9_-]", "", s)[:16] or "CEX"
+    return clean, clean[:6]
+
+
+def _clean_liq_alert(row: dict[str, Any]) -> dict[str, Any] | None:
+    ts = _int_or_zero(row.get("ts"))
+    if ts <= 0:
+        return None
+    akey = str(row.get("alert_key") or "").strip()
+    lvl = "major" if str(row.get("level") or "").lower() == "major" else "normal"
+    msg = str(row.get("message") or "").strip()
+    if not msg:
+        return None
+    coin = ""
+    kind = "LIQ_WAVE"
+    if akey.startswith("wick_up:"):
+        kind = "WICK_UP"
+        coin = akey.split(":", 1)[1].strip().upper()
+    elif akey.startswith("wick_down:"):
+        kind = "WICK_DOWN"
+        coin = akey.split(":", 1)[1].strip().upper()
+    elif ":" in akey:
+        c_part, s_part = akey.split(":", 1)
+        coin = c_part.strip().upper()
+        s_low = s_part.strip().lower()
+        if s_low == "short":
+            kind = "LIQ_SHORT"
+        elif s_low == "long":
+            kind = "LIQ_LONG"
+    coin = re.sub(r"[^A-Z0-9:/_-]", "", coin)[:16]
+    if coin in _IGNORED_LIQ_SYMS:
+        return None
+
+    lines = []
+    for raw_ln in msg.splitlines():
+        ln = _strip_emojis(raw_ln).strip().lstrip("•-· ").strip()
+        ln = re.sub(r"[（(]非投资建议[）)]", "", ln).strip()
+        if not ln:
+            continue
+        lines.append(ln)
+    if not lines:
+        return None
+    title = _clean_cut(lines[0], 78)
+    detail = _clean_cut(" · ".join(lines[1:3]), 170) if len(lines) > 1 else ""
+    return {
+        "ts": ts,
+        "coin": coin or "ALL",
+        "kind": kind,
+        "level": lvl,
+        "title": title,
+        "detail": detail,
+    }
+
+
+def export_liquidations(data_dir: Path, *, now_sec: int | None = None) -> dict[str, Any]:
+    """Read-only export of CoinGlass multi-exchange liquidation stats & wick alerts from liquidation.db."""
+    now = int(time.time()) if now_sec is None else now_sec
+    tracked_coins = ("BTC", "ETH", "SOL", "HYPE")
+    empty_bucket = lambda: {"long_usd": 0.0, "short_usd": 0.0, "total_usd": 0.0, "count": 0, "ex_usd": {}}
+
+    conn = _connect_ro(data_dir, "liquidation.db")
+    if conn is None:
+        return {
+            "available": False,
+            "source": "CoinGlass 全网永续强平统计",
+            "updated_at": 0,
+            "exchanges_count": 0,
+            "windows": {},
+            "recent_events": [],
+            "wick_alerts": [],
+        }
+
+    try:
+        # 1. Exact full-window SQL aggregations (NO row LIMIT truncation and NO future ts leak!)
+        agg_24h, ok_24h = _safe_query(
+            conn,
+            """
+            SELECT coin, LOWER(side) AS side_low, exchange,
+                   COUNT(*) AS cnt, SUM(usd) AS sum_usd, MAX(ts) AS max_ts
+            FROM liq_events
+            WHERE ts >= ? AND ts <= ? AND usd > 0 AND LOWER(side) IN ('long', 'short')
+            GROUP BY coin, side_low, exchange
+            """,
+            (now - 86400, now),
+        )
+        agg_1h, ok_1h = _safe_query(
+            conn,
+            """
+            SELECT coin, LOWER(side) AS side_low, exchange,
+                   COUNT(*) AS cnt, SUM(usd) AS sum_usd, MAX(ts) AS max_ts
+            FROM liq_events
+            WHERE ts >= ? AND ts <= ? AND usd > 0 AND LOWER(side) IN ('long', 'short')
+            GROUP BY coin, side_low, exchange
+            """,
+            (now - 3600, now),
+        )
+        # 2. Separate detail query ONLY for recent >= $25K large liquidation feed (exclude leveraged ETFs BEFORE LIMIT!)
+        ignored_sorted = sorted(_IGNORED_LIQ_SYMS)
+        ig_ph = ",".join("?" for _ in ignored_sorted)
+        detail_rows, _ = _safe_query(
+            conn,
+            f"""
+            SELECT ts, exchange, coin, side, usd, px
+            FROM liq_events
+            WHERE ts >= ? AND ts <= ? AND usd >= 25000
+              AND LOWER(side) IN ('long', 'short')
+              AND UPPER(TRIM(coin)) NOT IN ({ig_ph})
+            ORDER BY ts DESC
+            LIMIT 40
+            """,
+            (now - 86400, now, *ignored_sorted),
+        )
+        alert_rows, _ = _safe_query(
+            conn,
+            """
+            SELECT ts, alert_key, level, message
+            FROM alerts
+            WHERE ts >= ? AND ts <= ?
+            ORDER BY ts DESC
+            LIMIT 20
+            """,
+            (now - 86400, now),
+        )
+    finally:
+        conn.close()
+
+    if not ok_24h:
+        return {
+            "available": False,
+            "source": "CoinGlass 全网永续强平统计",
+            "updated_at": 0,
+            "exchanges_count": 0,
+            "windows": {},
+            "recent_events": [],
+            "wick_alerts": [],
+        }
+
+    win_raw: dict[str, dict[str, dict[str, Any]]] = {
+        "24h": {k: empty_bucket() for k in ("ALL", *tracked_coins)},
+    }
+    if ok_1h:
+        win_raw["1h"] = {k: empty_bucket() for k in ("ALL", *tracked_coins)}
+    distinct_ex: set[str] = set()
+    latest_ts = 0
+
+    agg_pairs = [("24h", agg_24h)]
+    if ok_1h:
+        agg_pairs.append(("1h", agg_1h))
+    for wn, agg_rows in agg_pairs:
+        for r in agg_rows:
+            usd = _num(r.get("sum_usd"), 2)
+            cnt = _int_or_zero(r.get("cnt"))
+            mts = _int_or_zero(r.get("max_ts"))
+            side_low = str(r.get("side_low") or "").strip().lower()
+            if usd is None or usd <= 0 or cnt <= 0 or side_low not in ("long", "short"):
+                continue
+            coin = re.sub(r"[^A-Z0-9:/_-]", "", str(r.get("coin") or "").strip().upper())[:16]
+            if not coin or coin in _IGNORED_LIQ_SYMS:
+                continue
+            ex_full, ex_short = _norm_liq_exchange(str(r.get("exchange") or ""))
+            if wn == "24h":
+                distinct_ex.add(ex_full)
+            if mts > latest_ts:
+                latest_ts = mts
+            scopes = ["ALL"]
+            if coin in tracked_coins:
+                scopes.append(coin)
+            for sc in scopes:
+                b = win_raw[wn][sc]
+                if side_low == "long":
+                    b["long_usd"] += usd
+                else:
+                    b["short_usd"] += usd
+                b["total_usd"] += usd
+                b["count"] += cnt
+                b["ex_usd"][ex_short] = b["ex_usd"].get(ex_short, 0.0) + usd
+
+    recent_events: list[dict[str, Any]] = []
+    for r in detail_rows:
+        ts = _int_or_zero(r.get("ts"))
+        usd = _num(r.get("usd"), 2)
+        px = _num(r.get("px"), 6)
+        side_low = str(r.get("side") or "").strip().lower()
+        if ts <= 0 or usd is None or usd < 25_000 or side_low not in ("long", "short"):
+            continue
+        coin = re.sub(r"[^A-Z0-9:/_-]", "", str(r.get("coin") or "").strip().upper())[:16]
+        if not coin or coin in _IGNORED_LIQ_SYMS:
+            continue
+        ex_full, ex_short = _norm_liq_exchange(str(r.get("exchange") or ""))
+        if ts > latest_ts:
+            latest_ts = ts
+        recent_events.append({
+            "ts": ts,
+            "ex": ex_full,
+            "ex_short": ex_short,
+            "coin": coin,
+            "side": "LONG" if side_low == "long" else "SHORT",
+            "usd": round(usd, 0),
+            "px": round(px, 6 if (px is not None and px < 1.0) else 2) if (px is not None and px > 0) else None,
+        })
+        if len(recent_events) >= 40:
+            break
+
+    windows_out: dict[str, dict[str, Any]] = {}
+    for wn, sc_map in win_raw.items():
+        windows_out[wn] = {}
+        for sc, b in sc_map.items():
+            tot = b["total_usd"]
+            top_ex = []
+            if tot > 0:
+                for ex_s, ex_v in sorted(b["ex_usd"].items(), key=lambda kv: kv[1], reverse=True)[:4]:
+                    top_ex.append({
+                        "ex": ex_s,
+                        "usd": round(ex_v, 0),
+                        "pct": round((ex_v / tot) * 100.0, 1),
+                    })
+            windows_out[wn][sc] = {
+                "long_usd": round(b["long_usd"], 0),
+                "short_usd": round(b["short_usd"], 0),
+                "total_usd": round(tot, 0),
+                "count": int(b["count"]),
+                "top_exchanges": top_ex,
+            }
+
+    wick_alerts: list[dict[str, Any]] = []
+    for ar in alert_rows:
+        parsed = _clean_liq_alert(ar)
+        if parsed:
+            wick_alerts.append(parsed)
+            if parsed["ts"] > latest_ts:
+                latest_ts = parsed["ts"]
+            if len(wick_alerts) >= 10:
+                break
+
+    ex_cnt = len(distinct_ex)
+    return {
+        "available": True,
+        "source": f"CoinGlass {ex_cnt}所全网统计" if ex_cnt > 0 else "CoinGlass 全网永续强平统计",
+        "updated_at": latest_ts,
+        "exchanges_count": ex_cnt,
+        "windows": windows_out,
+        "recent_events": recent_events,
+        "wick_alerts": wick_alerts,
+    }
+
+
 def build_bundle(data_dir: Path) -> dict[str, Any]:
     now_dt = datetime.now(BJT)
     now_sec = int(now_dt.timestamp())
@@ -1773,6 +2045,7 @@ def build_bundle(data_dir: Path) -> dict[str, Any]:
     flows = export_flows(data_dir, now_sec=now_sec)
     labs = export_labs(data_dir, now_dt=now_dt)
     feed = export_feed(data_dir, now_sec=now_sec)
+    liquidations = export_liquidations(data_dir, now_sec=now_sec)
 
     regime, desk_signals = _synthesize_regime_and_signals(overview, arb, flows)
     overview["market_regime"] = regime
@@ -1785,6 +2058,7 @@ def build_bundle(data_dir: Path) -> dict[str, Any]:
         "flows": flows,
         "labs": labs,
         "feed": feed,
+        "liquidations": liquidations,
     }
 
 

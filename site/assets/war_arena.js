@@ -104,7 +104,31 @@
     audioCtx: null,
     wsHL: null,
     wsBN: null,
+    wsOkxLiq: null,
+    wsBnLiq: null,
+    okxPingTimer: null,
+    okxReconnectTimer: null,
+    bnLiqReconnectTimer: null,
+    bnLiqBackoffMs: 6000,
+    okxCtValRetryTimer: null,
+    okxCtValAttempts: 0,
     wsReconnectTimer: null,
+    okxCtVal: new Map(),
+    okxCtValLoaded: false,
+    okxCtValLoading: false,
+    liveMarkPx: {},
+    liveLiqEvents: [],
+    seenLiqKeys: new Set(),
+    liqWsOkxUp: false,
+    liqWsOkxSubscribed: false,
+    liqWsBnUp: false,
+    liqRailRafId: null,
+    railTab: "liq",
+    liqScope: "COIN",
+    liqWin: "24h",
+    liqTypeFilter: "ALL",
+    lastMagRenderTs: 0,
+    lastLiqSfxTs: 0,
     rafId: null,
     running: false,
     canvas: null,
@@ -134,7 +158,7 @@
     lastFrameTs: 0,
     lastHudTs: 0,
     ambientTimer: 0,
-    danmakuOn: safeStoreGet("danclub_war_danmaku", "1") !== "0",
+    danmakuOn: safeStoreGet("danclub_war_danmaku", "0") === "1",
     danmakuActive: [],
     danmakuQueue: [],
     dmSpawnCooldown: 0,
@@ -720,6 +744,73 @@
     }
   }
 
+  function playLiqExplosionSfx(usd) {
+    if (!war.soundOn || war.userMuted || war.volume <= 0) return;
+    const nowMs = Date.now();
+    if (nowMs - war.lastLiqSfxTs < 320) return;
+    war.lastLiqSfxTs = nowMs;
+    try {
+      const ctx = ensureAudioCtx();
+      if (!ctx || ctx.state !== "running") return;
+      const now = ctx.currentTime + 0.01;
+      const scale = Math.max(0.2, Math.min(1, war.volume));
+      const heavy = usd >= 500_000;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "triangle";
+      osc.frequency.setValueAtTime(heavy ? 185 : 240, now);
+      osc.frequency.exponentialRampToValueAtTime(42, now + (heavy ? 0.42 : 0.26));
+      gain.gain.setValueAtTime((heavy ? 0.22 : 0.14) * scale, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + (heavy ? 0.44 : 0.28));
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(now);
+      osc.stop(now + (heavy ? 0.46 : 0.3));
+    } catch {}
+  }
+
+  function getMatchedLivePx(venue, coin) {
+    const entry = war.liveMarkPx[`${venue}:${coin}`];
+    if (!entry || !Number.isFinite(entry.px) || entry.px <= 0) return null;
+    if (Date.now() - entry.ts > 15000) return null;
+    return entry.px;
+  }
+
+  function liveWhaleDistPct(pos) {
+    if (!pos || pos.liq_px === null || pos.liq_px === undefined || pos.liq_px === "") return null;
+    const lq = Number(pos.liq_px);
+    if (!Number.isFinite(lq) || lq <= 0) return null;
+    const venues = Array.isArray(pos.venues) ? pos.venues : [];
+    if (venues.length !== 1) return null;
+    // Strict venue-matched official HL markPx (from activeAssetCtx WS); else verified snapshot distance/mark_px!
+    const livePx = venues[0] === "HL" ? getMatchedLivePx("HL_MARK", pos.coin) : null;
+    if (livePx === null) {
+      if (
+        pos.liq_dist_pct !== null &&
+        pos.liq_dist_pct !== undefined &&
+        pos.liq_dist_pct !== "" &&
+        Number.isFinite(Number(pos.liq_dist_pct))
+      ) {
+        const sd = Number(pos.liq_dist_pct);
+        return sd > 0 && sd <= 60 ? sd : null;
+      }
+      const snapPx = Number(pos.mark_px);
+      if (!Number.isFinite(snapPx) || snapPx <= 0) return null;
+      const snapDist = pos.side === "LONG" ? ((snapPx - lq) / snapPx) * 100 : ((lq - snapPx) / snapPx) * 100;
+      return Number.isFinite(snapDist) && snapDist > 0 && snapDist <= 60 ? snapDist : null;
+    }
+    const raw = pos.side === "LONG" ? ((livePx - lq) / livePx) * 100 : ((lq - livePx) / livePx) * 100;
+    if (!Number.isFinite(raw) || raw > 60) return null;
+    return raw;
+  }
+
+  function fmtPxShort(v) {
+    const n = Number(v);
+    if (!Number.isFinite(n) || n <= 0) return "--";
+    if (n >= 1000) return `$${n.toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
+    if (n >= 1) return `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    return `$${n.toFixed(4)}`;
+  }
+
   /* ---------- Persistent Whale Flagships Positioned in Left/Right Airspace ---------- */
   function rebuildCarriers() {
     war.carriers = [];
@@ -833,6 +924,338 @@
     }
   }
 
+  /* ---------- Real-Time Public Liquidation Streams (OKX Verified ctVal + Binance Futures) ---------- */
+  function updateLiqWsUi() {
+    const dot = $("liq-ws-dot");
+    const lbl = $("liq-ws-status");
+    const okxReady = war.liqWsOkxUp && war.liqWsOkxSubscribed && war.okxCtValLoaded;
+    const sources = [];
+    if (okxReady) sources.push("OKX");
+    if (war.liqWsBnUp) sources.push("Binance");
+    const up = sources.length > 0;
+    if (dot) dot.classList.toggle("online", up);
+    if (lbl) {
+      const exCnt = Number(war.data?.liquidations?.exchanges_count) || 0;
+      const snapLbl = exCnt > 0 ? `CoinGlass ${exCnt}所快照` : "CoinGlass 快照";
+      if (up) {
+        lbl.textContent = `毫秒强平直连 (${sources.join("+")}) + ${snapLbl}`;
+      } else if (war.liqWsOkxUp && !war.okxCtValLoaded) {
+        lbl.textContent = `OKX 合约乘数加载中 · ${snapLbl}`;
+      } else {
+        lbl.textContent = `${snapLbl}（实时强平流连接中）`;
+      }
+    }
+  }
+
+  function scheduleLiqRailRender() {
+    if (war.liqRailRafId !== null || !war.running || document.hidden) return;
+    war.liqRailRafId = requestAnimationFrame(() => {
+      war.liqRailRafId = null;
+      if (war.running && !document.hidden && war.railTab === "liq") renderLiqRail();
+    });
+  }
+
+  async function ensureOkxCtValMap() {
+    if (war.okxCtValLoaded || war.okxCtValLoading || war.okxCtValAttempts >= 4) return;
+    war.okxCtValLoading = true;
+    war.okxCtValAttempts += 1;
+    clearTimeout(war.okxCtValRetryTimer);
+    war.okxCtValRetryTimer = null;
+    const ctrl = typeof AbortController === "function" ? new AbortController() : null;
+    const tid = ctrl ? setTimeout(() => ctrl.abort(), 5000) : null;
+    try {
+      const resp = await fetch("https://www.okx.com/api/v5/public/instruments?instType=SWAP", {
+        signal: ctrl ? ctrl.signal : undefined,
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const body = await resp.json();
+      const rows = Array.isArray(body?.data) ? body.data : [];
+      rows.forEach((it) => {
+        const instId = String(it?.instId || "");
+        if (!instId.endsWith("-USDT-SWAP")) return;
+        const baseCoin = instId.split("-")[0].toUpperCase();
+        const ctVal = Number(it?.ctVal);
+        const ctCcy = String(it?.ctValCcy || "").toUpperCase();
+        // Strict base-currency linear contract check so sz * ctVal * bkPx is mathematically valid
+        if (Number.isFinite(ctVal) && ctVal > 0 && ctCcy === baseCoin) {
+          war.okxCtVal.set(instId, ctVal);
+        }
+      });
+      if (war.okxCtVal.size > 0) {
+        war.okxCtValLoaded = true;
+        updateLiqWsUi();
+        return;
+      }
+      throw new Error("Empty OKX instrument list");
+    } catch {
+      // Bounded backoff retry while War Room stays active
+      if (war.running && war.okxCtValAttempts < 4) {
+        const delay = Math.min(30000, 5000 * Math.pow(2, war.okxCtValAttempts - 1));
+        war.okxCtValRetryTimer = setTimeout(() => ensureOkxCtValMap(), delay);
+      }
+    } finally {
+      if (tid) clearTimeout(tid);
+      war.okxCtValLoading = false;
+      updateLiqWsUi();
+    }
+  }
+
+  function ingestLiquidation(coin, side, usd, px, exShort, rawTsMs, rawQtyStr, pxKind = "均价") {
+    const c = String(coin || "").trim().toUpperCase().replace(/[^A-Z0-9:/_-]/g, "").slice(0, 16);
+    if (!c || (side !== "LONG" && side !== "SHORT")) return;
+    if (!Number.isFinite(usd) || usd < 5_000 || !Number.isFinite(px) || px <= 0) return;
+    const tsMs = Number.isFinite(rawTsMs) && rawTsMs > 0 ? Math.floor(rawTsMs) : Date.now();
+    const ts = Math.floor(tsMs / 1000);
+    const qtyTag = String(rawQtyStr ?? Math.round(usd)).trim().slice(0, 24);
+    const dedupKey = `${exShort}:${c}:${side}:${tsMs}:${qtyTag}`;
+    if (war.seenLiqKeys.has(dedupKey)) return;
+    addBoundedSet(war.seenLiqKeys, dedupKey, 240);
+
+    war.liveLiqEvents.unshift({
+      ts,
+      ex: exShort === "BN" ? "Binance" : exShort,
+      ex_short: exShort,
+      coin: c,
+      side,
+      usd: Math.round(usd),
+      px,
+      px_kind: pxKind,
+      live: true,
+    });
+    if (war.liveLiqEvents.length > 30) war.liveLiqEvents.length = 30;
+
+    // Trigger real radar explosion blast ONLY when the liquidation matches the active battlefield coin!
+    if (c === war.activeCoin && war.running) {
+      const W = war.cssW || 800;
+      const H = war.cssH || 350;
+      const fx = W * war.frontline;
+      const isLongLiq = side === "LONG";
+      const bx = isLongLiq
+        ? Math.max(46, fx * (0.35 + Math.random() * 0.45))
+        : Math.min(W - 46, fx + (W - fx) * (0.2 + Math.random() * 0.45));
+      const by = 48 + Math.random() * Math.max(60, H - 108);
+      const heavy = usd >= 100_000;
+      const mega = usd >= 500_000;
+
+      war.rings.push({
+        x: bx,
+        y: by,
+        r: 6,
+        maxR: mega ? 108 : heavy ? 74 : 44,
+        color: "#f59e0b",
+        alpha: 0.96,
+      });
+      war.rings.push({
+        x: bx,
+        y: by,
+        r: 4,
+        maxR: mega ? 76 : heavy ? 50 : 30,
+        color: isLongLiq ? "#10b981" : "#f43f5e",
+        alpha: 0.92,
+      });
+
+      const sparkN = mega ? 34 : heavy ? 22 : 12;
+      for (let k = 0; k < sparkN; k++) {
+        const ang = Math.random() * Math.PI * 2;
+        const spd = 55 + Math.random() * (mega ? 220 : 140);
+        war.sparks.push({
+          x: bx,
+          y: by,
+          vx: Math.cos(ang) * spd,
+          vy: Math.sin(ang) * spd,
+          life: 1.0,
+          color: k % 2 === 0 ? "#f59e0b" : isLongLiq ? "#6ee7b7" : "#fda4af",
+          size: mega ? 3.0 : 2.1,
+        });
+      }
+
+      if (war.floatingHits.length < 22) {
+        war.floatingHits.push({
+          x: bx,
+          y: by - 8,
+          vy: -28,
+          text: `爆${isLongLiq ? "多" : "空"} -${fmtCompact(usd)} (${exShort})`,
+          color: "#fbbf24",
+          big: heavy,
+          alpha: 1.0,
+        });
+      }
+
+      const pushDir = isLongLiq ? -1 : 1;
+      war.frontlineVel = Math.max(-0.95, Math.min(0.95, war.frontlineVel + pushDir * (mega ? 0.55 : heavy ? 0.28 : 0.1)));
+      war.clashY = by;
+      war.clashSide = isLongLiq ? "SHORT" : "LONG";
+      war.clashPower = Math.min(1.6, war.clashPower + (heavy ? 0.9 : 0.35));
+
+      if (heavy) {
+        war.shakeAmt = Math.max(war.shakeAmt, mega ? 10 : 5.5);
+        war.bannerText = `实盘强平 · ${c} ${isLongLiq ? "多单爆仓" : "空单爆仓"} ${fmtCompact(usd)} (${exShort} ${pxKind} ${fmtPxShort(px)})`;
+        war.bannerSide = isLongLiq ? "SHORT" : "LONG";
+        war.bannerAlpha = 1.15;
+        playLiqExplosionSfx(usd);
+      }
+    }
+
+    // Coalesce rail DOM re-render and skip when current rail filters hide this event
+    const visibleInRail =
+      war.railTab === "liq" &&
+      (war.liqTypeFilter === "ALL" || war.liqTypeFilter === "LIQ") &&
+      (war.liqScope === "ALL" || c === war.activeCoin);
+    if (visibleInRail) {
+      scheduleLiqRailRender();
+    }
+  }
+
+  function disconnectLiqSockets() {
+    clearTimeout(war.okxReconnectTimer);
+    clearTimeout(war.bnLiqReconnectTimer);
+    clearTimeout(war.okxCtValRetryTimer);
+    war.okxCtValRetryTimer = null;
+    clearInterval(war.okxPingTimer);
+    war.okxPingTimer = null;
+    if (war.wsOkxLiq) {
+      try { war.wsOkxLiq.close(); } catch {}
+      war.wsOkxLiq = null;
+    }
+    if (war.wsBnLiq) {
+      try { war.wsBnLiq.close(); } catch {}
+      war.wsBnLiq = null;
+    }
+    war.liqWsOkxUp = false;
+    war.liqWsOkxSubscribed = false;
+    war.liqWsBnUp = false;
+    updateLiqWsUi();
+  }
+
+  function connectOkxLiqSocket() {
+    clearTimeout(war.okxReconnectTimer);
+    clearInterval(war.okxPingTimer);
+    war.okxPingTimer = null;
+    if (war.wsOkxLiq) {
+      try { war.wsOkxLiq.close(); } catch {}
+      war.wsOkxLiq = null;
+    }
+    war.liqWsOkxUp = false;
+    war.liqWsOkxSubscribed = false;
+    if (!war.okxCtValLoaded) {
+      ensureOkxCtValMap();
+    }
+    try {
+      const wsO = new WebSocket("wss://ws.okx.com:8443/ws/v5/public");
+      war.wsOkxLiq = wsO;
+      wsO.addEventListener("open", () => {
+        if (war.wsOkxLiq !== wsO) return;
+        war.liqWsOkxUp = true;
+        updateLiqWsUi();
+        wsO.send(JSON.stringify({ op: "subscribe", args: [{ channel: "liquidation-orders", instType: "SWAP" }] }));
+        clearInterval(war.okxPingTimer);
+        war.okxPingTimer = setInterval(() => {
+          if (war.wsOkxLiq === wsO && wsO.readyState === WebSocket.OPEN) {
+            try { wsO.send("ping"); } catch {}
+          }
+        }, 25000);
+      });
+      wsO.addEventListener("message", (ev) => {
+        if (war.wsOkxLiq !== wsO || ev.data === "pong") return;
+        try {
+          const msg = JSON.parse(ev.data);
+          if (msg?.event === "subscribe" && msg?.arg?.channel === "liquidation-orders") {
+            war.liqWsOkxSubscribed = true;
+            updateLiqWsUi();
+            return;
+          }
+          if (msg?.arg?.channel !== "liquidation-orders" || !Array.isArray(msg.data)) return;
+          msg.data.forEach((grp) => {
+            const instId = String(grp?.instId || "");
+            if (!instId.endsWith("-USDT-SWAP")) return;
+            const ctVal = war.okxCtVal.get(instId);
+            if (!ctVal) return; // Fail-closed: never guess contract multiplier
+            const baseCoin = instId.split("-")[0];
+            (grp.details || []).forEach((d) => {
+              const px = Number(d?.bkPx);
+              const sz = Number(d?.sz);
+              const posSide = String(d?.posSide || "").toLowerCase();
+              const ordSide = String(d?.side || "").toLowerCase();
+              const side =
+                posSide === "long" ? "LONG" : posSide === "short" ? "SHORT" : ordSide === "sell" ? "LONG" : ordSide === "buy" ? "SHORT" : "";
+              if (!side || !Number.isFinite(px) || !Number.isFinite(sz) || px <= 0 || sz <= 0) return;
+              const usd = sz * ctVal * px;
+              const tsMs = Number(d?.ts) || Date.now();
+              ingestLiquidation(baseCoin, side, usd, px, "OKX", tsMs, String(d?.sz ?? ""), "破产价");
+            });
+          });
+        } catch {}
+      });
+      wsO.addEventListener("close", () => {
+        if (war.wsOkxLiq === wsO) {
+          war.wsOkxLiq = null;
+          war.liqWsOkxUp = false;
+          war.liqWsOkxSubscribed = false;
+          clearInterval(war.okxPingTimer);
+          war.okxPingTimer = null;
+          updateLiqWsUi();
+          if (war.running) {
+            war.okxReconnectTimer = setTimeout(connectOkxLiqSocket, 6000);
+          }
+        }
+      });
+      wsO.addEventListener("error", () => {});
+    } catch {}
+  }
+
+  function connectBnLiqSocket() {
+    clearTimeout(war.bnLiqReconnectTimer);
+    if (war.wsBnLiq) {
+      try { war.wsBnLiq.close(); } catch {}
+      war.wsBnLiq = null;
+    }
+    try {
+      const wsB = new WebSocket("wss://fstream.binance.com/ws/!forceOrder@arr");
+      war.wsBnLiq = wsB;
+      wsB.addEventListener("open", () => {
+        if (war.wsBnLiq !== wsB) return;
+        war.liqWsBnUp = true;
+        war.bnLiqBackoffMs = 6000;
+        updateLiqWsUi();
+      });
+      wsB.addEventListener("message", (ev) => {
+        if (war.wsBnLiq !== wsB) return;
+        try {
+          const msg = JSON.parse(ev.data);
+          const o = msg?.o;
+          if (!o || typeof o !== "object") return;
+          const sym = String(o.s || "");
+          if (!sym.endsWith("USDT")) return;
+          const coin = sym.slice(0, -4);
+          const px = Number(o.ap || o.p);
+          const qty = Number(o.z || o.q);
+          const side = o.S === "SELL" ? "LONG" : o.S === "BUY" ? "SHORT" : "";
+          if (!side || !Number.isFinite(px) || !Number.isFinite(qty) || px <= 0 || qty <= 0) return;
+          const tsMs = Number(o.T || msg.E) || Date.now();
+          ingestLiquidation(coin, side, px * qty, px, "BN", tsMs, String(o.z || o.q || ""), "均价");
+        } catch {}
+      });
+      wsB.addEventListener("close", () => {
+        if (war.wsBnLiq === wsB) {
+          war.wsBnLiq = null;
+          war.liqWsBnUp = false;
+          updateLiqWsUi();
+          if (war.running) {
+            const wait = war.bnLiqBackoffMs;
+            war.bnLiqBackoffMs = Math.min(45000, Math.round(war.bnLiqBackoffMs * 1.8));
+            war.bnLiqReconnectTimer = setTimeout(connectBnLiqSocket, wait);
+          }
+        }
+      });
+      wsB.addEventListener("error", () => {});
+    } catch {}
+  }
+
+  function connectLiqSockets() {
+    connectOkxLiqSocket();
+    connectBnLiqSocket();
+  }
+
   /* ---------- Public WebSocket Trade Feeds (Hyperliquid Global + Binance Optional) ---------- */
   function disconnectSockets() {
     clearTimeout(war.wsReconnectTimer);
@@ -853,20 +1276,27 @@
     const statusEl = $("war-ws-status");
     if (statusEl) statusEl.textContent = `连接 ${coin} 实况成交流…`;
 
-    // 1. Hyperliquid Public Trades WebSocket (works globally without 451 geo-block!)
+    // 1. Hyperliquid Public Trades + Official activeAssetCtx Mark Price WebSocket (zero 451 geo-block!)
     try {
       const ws = new WebSocket("wss://api.hyperliquid.xyz/ws");
       war.wsHL = ws;
       ws.addEventListener("open", () => {
         if (war.wsHL !== ws) return;
         ws.send(JSON.stringify({ method: "subscribe", subscription: { type: "trades", coin } }));
+        ws.send(JSON.stringify({ method: "subscribe", subscription: { type: "activeAssetCtx", coin } }));
         if (statusEl) statusEl.textContent = `实况直连 · ${coin} (Hyperliquid)`;
       });
       ws.addEventListener("message", (ev) => {
         if (war.wsHL !== ws) return;
         try {
           const msg = JSON.parse(ev.data);
-          if (msg.channel === "trades" && Array.isArray(msg.data)) {
+          if (msg.channel === "activeAssetCtx" && msg.data?.ctx) {
+            const mpx = Number(msg.data.ctx.markPx);
+            const mCoin = String(msg.data.coin || coin).toUpperCase();
+            if (Number.isFinite(mpx) && mpx > 0) {
+              war.liveMarkPx[`HL_MARK:${mCoin}`] = { px: mpx, ts: Date.now() };
+            }
+          } else if (msg.channel === "trades" && Array.isArray(msg.data)) {
             msg.data.forEach((tr) => {
               const px = Number(tr.px);
               const sz = Number(tr.sz);
@@ -1233,6 +1663,43 @@
     ctx.fill();
     ctx.restore();
 
+    // Real-time distance-to-liquidation HP bar (STRICT: only for verified single-venue liq_px!)
+    const distPct = liveWhaleDistPct(c.pos);
+    const isRedHp = distPct !== null && distPct < 5.0;
+    const isWarnHp = distPct !== null && distPct >= 5.0 && distPct < 12.0;
+
+    // Pulsing danger lock-on reticle & subtle smoke wisps for Red-HP (<5% from liquidation) real whales!
+    if (isRedHp) {
+      const pulse = 0.55 + Math.sin(t * 0.012 + c.phase) * 0.45;
+      const b = s * 1.42;
+      ctx.save();
+      ctx.strokeStyle = "#f59e0b";
+      ctx.globalAlpha = pulse;
+      ctx.lineWidth = 1.6;
+      [
+        [-1, -1],
+        [1, -1],
+        [-1, 1],
+        [1, 1],
+      ].forEach(([dx, dy]) => {
+        ctx.beginPath();
+        ctx.moveTo(dx * b, dy * (b - 6));
+        ctx.lineTo(dx * b, dy * b);
+        ctx.lineTo(dx * (b - 6), dy * b);
+        ctx.stroke();
+      });
+      // Rising subtle smoke circles
+      for (let sm = 0; sm < 2; sm++) {
+        const sp = ((t * 0.0011 + c.phase + sm * 0.5) % 1);
+        ctx.fillStyle = "rgba(148, 163, 184, 0.35)";
+        ctx.globalAlpha = (1 - sp) * 0.45;
+        ctx.beginPath();
+        ctx.arc((sm === 0 ? -4 : 5) + sp * 6, -s * 0.4 - sp * 18, 2.5 + sp * 4.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+
     // Targeting brackets on hover
     if (hovered) {
       const b = s * 1.35;
@@ -1252,18 +1719,37 @@
       });
     }
 
-    // Compact tactical nameplate under flagship (clamped safely inside canvas width on mobile)
+    // Compact tactical nameplate + real HP bar under flagship (clamped safely inside canvas width on mobile)
     const narrow = war.cssW < 540;
     const tag = `[${tierCode}] ${c.ent.display.slice(0, narrow ? 10 : 12)}`;
-    const amtTxt = `${isLong ? "+" : "-"}${fmtCompact(c.pos.usd)}`;
+    const amtTxt = isRedHp
+      ? `红血 距强平 ${Math.max(0, distPct).toFixed(1)}%`
+      : isWarnHp
+        ? `${isLong ? "+" : "-"}${fmtCompact(c.pos.usd)} · 距强平 ${distPct.toFixed(1)}%`
+        : `${isLong ? "+" : "-"}${fmtCompact(c.pos.usd)}`;
     ctx.font = `600 ${narrow ? 9 : 10}px ui-monospace, SFMono-Regular, Menlo, monospace`;
     ctx.textAlign = "center";
     const halfW = Math.max(ctx.measureText(tag).width, ctx.measureText(amtTxt).width) / 2 + 6;
     const labelOffsetX = Math.max(halfW - x, Math.min(war.cssW - halfW - x, 0));
-    ctx.fillStyle = haloCol;
-    ctx.fillText(tag, labelOffsetX, s + (narrow ? 11 : 13));
-    ctx.fillStyle = "rgba(226, 232, 240, 0.85)";
-    ctx.fillText(amtTxt, labelOffsetX, s + (narrow ? 21 : 24));
+
+    let labelTopY = s + (narrow ? 11 : 13);
+    if (distPct !== null) {
+      const barW = Math.max(36, Math.min(62, s * 2.1));
+      const barH = 4;
+      const barX = labelOffsetX - barW / 2;
+      const barY = s + 4;
+      const ratio = Math.max(0.06, Math.min(1, Math.max(0, distPct) / 20));
+      ctx.fillStyle = "rgba(15, 23, 42, 0.85)";
+      ctx.fillRect(barX, barY, barW, barH);
+      ctx.fillStyle = isRedHp ? "#f43f5e" : isWarnHp ? "#f59e0b" : "#10b981";
+      ctx.fillRect(barX, barY, barW * ratio, barH);
+      labelTopY = barY + barH + (narrow ? 9 : 11);
+    }
+
+    ctx.fillStyle = isRedHp ? "#fbbf24" : haloCol;
+    ctx.fillText(tag, labelOffsetX, labelTopY);
+    ctx.fillStyle = isRedHp ? "#fda4af" : "rgba(226, 232, 240, 0.85)";
+    ctx.fillText(amtTxt, labelOffsetX, labelTopY + (narrow ? 10 : 11));
 
     ctx.restore();
   }
@@ -1366,6 +1852,10 @@
     if (nowMs - war.lastHudTs > 450) {
       updateHudMetrics(nowMs);
       war.lastHudTs = nowMs;
+    }
+    if (nowMs - war.lastMagRenderTs > 1200) {
+      renderLiqMagnet();
+      war.lastMagRenderTs = nowMs;
     }
 
     // Spring-damper tug-of-war frontline physics: individual strikes physically push & recoil the battle line!
@@ -1682,10 +2172,15 @@
         const { ent, pos } = war.hoveredCarrier;
         const pnl = ent.alltime_pnl;
         const levSafe = Number.isFinite(Number(pos.lev)) && Number(pos.lev) > 0 ? ` · ${Number(pos.lev)}x` : "";
+        const dPct = liveWhaleDistPct(pos);
+        const liqLine = pos.liq_px
+          ? ` · 强平 ${fmtPxShort(pos.liq_px)}${dPct !== null ? ` (距强平 ${Math.max(0, dPct).toFixed(1)}%)` : ""}`
+          : "";
         tip.innerHTML = `
           <div><b>${esc(ent.display)}</b>${ent.x_handle && /^[A-Za-z0-9_]{2,15}$/.test(ent.x_handle) ? ` <span style="color:#38bdf8;">𝕏 @${esc(ent.x_handle)}</span>` : ""} <span class="muted">(${esc(ent.tier_label)})</span></div>
           <div class="${pos.side === "LONG" ? "ok" : "risk"}">${esc(pos.coin)} ${pos.side === "LONG" ? "做多" : "做空"} <b>${fmtCompact(pos.usd)}</b>${esc(levSafe)}</div>
-          ${pos.entry_px ? `<div class="muted small mono">开仓 $${Number(pos.entry_px).toLocaleString()}${pos.liq_px ? ` · 强平 $${Number(pos.liq_px).toLocaleString()}` : ""}</div>` : ""}
+          ${pos.entry_px || pos.liq_px ? `<div class="muted small mono">${pos.entry_px ? `开仓 ${fmtPxShort(pos.entry_px)}` : ""}${esc(liqLine)}</div>` : ""}
+          ${pos.upnl != null ? `<div class="${pos.upnl >= 0 ? "ok" : "risk"}">当前浮盈亏: <b>${fmtSignedCompact(pos.upnl)}</b></div>` : ""}
           <div class="muted">全账户总仓位 ${fmtCompact(ent.total_notional_usd)} · ${ent.addr_count} 址归并</div>
           ${pnl != null ? `<div class="${pnl >= 0 ? "ok" : "risk"}">历史实盘 PnL: <b>${fmtSignedCompact(pnl)}</b></div>` : ""}
           <div style="color:#38bdf8;margin-top:2px;">点击展开单舰完整持仓档案 →</div>
@@ -2300,7 +2795,7 @@
         ? Math.max(0, Math.floor(Number(rawTotal)))
         : barrage.items.length;
     const badge = $("dm-count-badge");
-    if (badge) badge.textContent = `${total} 条`;
+    if (badge) badge.textContent = String(total);
 
     const lPct = Number.isFinite(Number(st.long_pct)) ? Math.max(0, Math.min(100, Number(st.long_pct))) : 50;
     const longInt = Math.round(lPct);
@@ -2737,6 +3232,306 @@
     }
   }
 
+  /* ---------- Liquidation Magnet Ruler & Default Real-Time Loss / Kill Feed Rail ---------- */
+  function setRailTab(tab) {
+    war.railTab = tab === "chat" ? "chat" : "liq";
+    $("war-rail-tabs")
+      ?.querySelectorAll(".seg-btn")
+      .forEach((b) => {
+        const on = b.dataset.rail === war.railTab;
+        b.classList.toggle("active", on);
+        b.setAttribute("aria-selected", on ? "true" : "false");
+      });
+    const liqPane = $("war-rail-liq");
+    const chatPane = $("war-rail-chat");
+    const winGrp = $("liq-win-group");
+    const dmGrp = $("dm-filter-group");
+    if (liqPane) liqPane.hidden = war.railTab !== "liq";
+    if (chatPane) chatPane.hidden = war.railTab !== "chat";
+    if (winGrp) winGrp.hidden = war.railTab !== "liq";
+    if (dmGrp) dmGrp.hidden = war.railTab !== "chat";
+    if (war.railTab === "liq") renderLiqRail();
+    else renderBarrageWall();
+  }
+
+  function renderLiqMagnet() {
+    const coin = war.activeCoin;
+    const markEl = $("war-mag-mark");
+    const alertEl = $("war-mag-alert");
+    const ticksEl = $("war-mag-ticks");
+    const longEl = $("war-mag-long");
+    const shortEl = $("war-mag-short");
+    if (!markEl || !ticksEl || !longEl || !shortEl) return;
+
+    const mag = war.data?.liq_magnets?.[coin] || null;
+    const hlLivePx = getMatchedLivePx("HL_MARK", coin);
+    const snapPx = Number(mag?.mark_px) || 0;
+    const displayPx = hlLivePx || snapPx;
+    const pxTag = hlLivePx ? "HL 标记价" : "快照";
+    markEl.textContent = displayPx > 0 ? `${coin} ${fmtPxShort(displayPx)} (${pxTag})` : `${coin} --`;
+
+    const flagships = war.data?.flagships || [];
+    if (!flagships.length) {
+      ticksEl.innerHTML = "";
+      longEl.textContent = "⬇ 多头强平墙：暂无单所旗舰强平数据";
+      shortEl.textContent = "⬆ 空头强平墙：暂无单所旗舰强平数据";
+      if (alertEl) {
+        alertEl.textContent = "等待快照";
+        alertEl.className = "pill pill-muted mag-alert";
+      }
+      return;
+    }
+
+    // Aggregate across ALL verified single-venue flagships (never truncated to the 6 plotted tick pins!)
+    const longs = [];
+    const shorts = [];
+    flagships.forEach((ent) => {
+      (ent.positions || []).forEach((p) => {
+        if (p.coin !== coin) return;
+        const lq = Number(p.liq_px);
+        const venues = Array.isArray(p.venues) ? p.venues : [];
+        if (!Number.isFinite(lq) || lq <= 0 || venues.length !== 1) return;
+        const dist = liveWhaleDistPct(p);
+        if (dist === null || dist <= 0 || dist > 25) return;
+        const item = {
+          id: ent.id,
+          display: ent.display,
+          tier_code: ent.tier_code,
+          liq_px: lq,
+          liveDist: dist,
+          usd: Number(p.usd) || 0,
+          lev: p.lev,
+          venue: venues[0],
+        };
+        if (p.side === "LONG") longs.push(item);
+        else shorts.push(item);
+      });
+    });
+
+    longs.sort((a, b) => a.liveDist - b.liveDist || b.usd - a.usd);
+    shorts.sort((a, b) => a.liveDist - b.liveDist || b.usd - a.usd);
+
+    const redCount =
+      longs.filter((x) => x.liveDist < 5).length + shorts.filter((x) => x.liveDist < 5).length;
+
+    if (alertEl) {
+      if (redCount > 0) {
+        alertEl.textContent = `红血警戒 · ${redCount}舰距强平<5%`;
+        alertEl.className = "pill pill-risk mag-alert";
+      } else if (longs.length + shorts.length > 0) {
+        alertEl.textContent = `监测 ${longs.length + shorts.length} 艘单所旗舰`;
+        alertEl.className = "pill pill-info mag-alert";
+      } else {
+        alertEl.textContent = "±25%内无近端强平";
+        alertEl.className = "pill pill-muted mag-alert";
+      }
+    }
+
+    const tickHtml = [];
+    longs.slice(0, 6).forEach((t) => {
+      const leftPct = Math.max(3, Math.min(48.5, 50 - (t.liveDist / 25) * 47));
+      const danger = t.liveDist < 5 ? " is-danger" : "";
+      const tip = `[${t.tier_code}级] ${t.display} (${t.venue}) · 多单 ${fmtCompact(t.usd)}${t.lev ? ` (${t.lev}x)` : ""} · 强平 ${fmtPxShort(t.liq_px)} (-${t.liveDist.toFixed(1)}%) · 点击查档`;
+      tickHtml.push(
+        `<button class="mag-tick is-long${danger}" type="button" data-ent-id="${esc(t.id)}" style="left:${leftPct.toFixed(1)}%;" title="${esc(tip)}" aria-label="${esc(tip)}"></button>`
+      );
+    });
+    shorts.slice(0, 6).forEach((t) => {
+      const leftPct = Math.max(51.5, Math.min(97, 50 + (t.liveDist / 25) * 47));
+      const danger = t.liveDist < 5 ? " is-danger" : "";
+      const tip = `[${t.tier_code}级] ${t.display} (${t.venue}) · 空单 ${fmtCompact(t.usd)}${t.lev ? ` (${t.lev}x)` : ""} · 强平 ${fmtPxShort(t.liq_px)} (+${t.liveDist.toFixed(1)}%) · 点击查档`;
+      tickHtml.push(
+        `<button class="mag-tick is-short${danger}" type="button" data-ent-id="${esc(t.id)}" style="left:${leftPct.toFixed(1)}%;" title="${esc(tip)}" aria-label="${esc(tip)}"></button>`
+      );
+    });
+    ticksEl.innerHTML = tickHtml.join("");
+
+    if (longs.length) {
+      const topL = longs[0];
+      const sumL = longs.reduce((acc, x) => acc + x.usd, 0);
+      const cntL = new Set(longs.map((x) => x.id)).size;
+      longEl.textContent = `⬇ 多头强平墙：最近 ${fmtPxShort(topL.liq_px)} (-${topL.liveDist.toFixed(1)}%) · 25%内 ${fmtCompact(sumL)} (${cntL}舰)`;
+    } else {
+      longEl.textContent = "⬇ 多头强平墙：25%内无单所旗舰强平位";
+    }
+    if (shorts.length) {
+      const topS = shorts[0];
+      const sumS = shorts.reduce((acc, x) => acc + x.usd, 0);
+      const cntS = new Set(shorts.map((x) => x.id)).size;
+      shortEl.textContent = `⬆ 空头强平墙：最近 ${fmtPxShort(topS.liq_px)} (+${topS.liveDist.toFixed(1)}%) · 25%内 ${fmtCompact(sumS)} (${cntS}舰)`;
+    } else {
+      shortEl.textContent = "⬆ 空头强平墙：25%内无单所旗舰强平位";
+    }
+  }
+
+  function renderLiqRail() {
+    const coinBtn = $("liq-scope-coin-btn");
+    if (coinBtn) coinBtn.textContent = war.activeCoin;
+
+    const liq = war.data?.liquidations || null;
+    const scopeKey = war.liqScope === "ALL" ? "ALL" : war.activeCoin;
+    const winObj = liq?.available ? liq.windows?.[war.liqWin]?.[scopeKey] || null : null;
+
+    const srcEl = $("liq-board-src");
+    if (srcEl) {
+      srcEl.textContent = `${liq?.source || "CoinGlass 全网爆仓"} · ${scopeKey === "ALL" ? "全网" : scopeKey} ${war.liqWin}汇总`;
+    }
+
+    const lValEl = $("liq-long-val");
+    const sValEl = $("liq-short-val");
+    const cntEl = $("liq-total-cnt");
+    const bL = $("liq-bar-long");
+    const bS = $("liq-bar-short");
+    const exEl = $("liq-ex-row");
+
+    if (!winObj) {
+      if (lValEl) lValEl.textContent = "--";
+      if (sValEl) sValEl.textContent = "--";
+      if (cntEl) cntEl.textContent = "无快照";
+      if (bL) bL.style.width = "50%";
+      if (bS) bS.style.width = "50%";
+      if (exEl) exEl.textContent = war.data ? "CoinGlass 快照暂不可用（实时强平流独立运行）" : "正在载入 CoinGlass 快照…";
+    } else {
+      const lUsd = Number(winObj.long_usd) || 0;
+      const sUsd = Number(winObj.short_usd) || 0;
+      const tot = lUsd + sUsd;
+      const lPct = tot > 0 ? (lUsd / tot) * 100 : 50;
+      const sPct = tot > 0 ? 100 - lPct : 50;
+      if (lValEl) lValEl.textContent = tot > 0 ? `${fmtCompact(lUsd)} (${Math.round(lPct)}%)` : "$0";
+      if (sValEl) sValEl.textContent = tot > 0 ? `${fmtCompact(sUsd)} (${Math.round(sPct)}%)` : "$0";
+      if (cntEl) cntEl.textContent = `${Number(winObj.count) || 0} 笔`;
+      if (bL) bL.style.width = `${lPct.toFixed(1)}%`;
+      if (bS) bS.style.width = `${sPct.toFixed(1)}%`;
+      if (exEl) {
+        const exList = Array.isArray(winObj.top_exchanges) ? winObj.top_exchanges : [];
+        exEl.textContent = exList.length
+          ? `主战场分布：${exList.map((e) => `${e.ex} ${e.pct}%`).join(" · ")}`
+          : `当前 ${war.liqWin} 窗口已统计为 0 笔`;
+      }
+    }
+
+    const feedEl = $("war-liq-feed");
+    if (!feedEl) return;
+
+    const rows = [];
+    const filterCoin = war.liqScope === "COIN" ? war.activeCoin : null;
+    const nowSec = Math.floor(Date.now() / 1000);
+
+    // 1. Live WS Liquidation events + CoinGlass snapshot events (1-to-1 dedup; chronological sort!)
+    if (war.liqTypeFilter === "ALL" || war.liqTypeFilter === "LIQ") {
+      const liveShown = [];
+      war.liveLiqEvents.forEach((ev) => {
+        if (filterCoin && ev.coin !== filterCoin) return;
+        liveShown.push(ev);
+        const ageSec = nowSec - (Number(ev.ts) || 0);
+        const isFreshLive = ageSec >= -60 && ageSec <= 180;
+        rows.push({ kind: "LIQ", ts: Number(ev.ts) || 0, prio: 1, live: isFreshLive, data: ev });
+      });
+      const usedLiveIdx = new Set();
+      (liq?.recent_events || []).forEach((ev) => {
+        if (filterCoin && ev.coin !== filterCoin) return;
+        const evTs = Number(ev.ts) || 0;
+        const evUsd = Number(ev.usd) || 0;
+        const matchIdx = liveShown.findIndex(
+          (lv, idx) =>
+            !usedLiveIdx.has(idx) &&
+            lv.coin === ev.coin &&
+            lv.side === ev.side &&
+            lv.ex_short === ev.ex_short &&
+            Math.abs(lv.ts - evTs) <= 15 &&
+            Math.abs(lv.usd - evUsd) <= Math.max(evUsd, lv.usd) * 0.12
+        );
+        if (matchIdx >= 0) {
+          usedLiveIdx.add(matchIdx);
+          return;
+        }
+        rows.push({ kind: "LIQ", ts: evTs, prio: 0, live: false, data: ev });
+      });
+    }
+
+    // 2. CoinGlass Wick Alerts (WICK filter strictly shows WICK_UP/WICK_DOWN; LIQ waves show under ALL/LIQ)
+    if (war.liqTypeFilter === "ALL" || war.liqTypeFilter === "WICK" || war.liqTypeFilter === "LIQ") {
+      (liq?.wick_alerts || []).forEach((wk) => {
+        if (filterCoin && wk.coin !== "ALL" && wk.coin !== filterCoin) return;
+        const isWick = wk.kind === "WICK_UP" || wk.kind === "WICK_DOWN";
+        if (war.liqTypeFilter === "WICK" && !isWick) return;
+        if (war.liqTypeFilter === "LIQ" && isWick) return;
+        rows.push({ kind: "WICK", ts: Number(wk.ts) || 0, prio: 0, live: false, data: wk });
+      });
+    }
+
+    // 3. Real Flagship Whale Position Moves (STRICT coin filter: never backfill other coins into a coin view!)
+    if (war.liqTypeFilter === "ALL" || war.liqTypeFilter === "WHALE") {
+      const allMoves = war.data?.recent_moves || [];
+      const picked = filterCoin ? allMoves.filter((m) => m.coin === filterCoin) : allMoves;
+      picked.forEach((mv, idx) => {
+        rows.push({ kind: "WHALE", ts: Number(mv.ts) || 0, prio: -idx, live: false, data: mv });
+      });
+    }
+
+    rows.sort((a, b) => b.ts - a.ts || b.prio - a.prio);
+
+    if (!rows.length) {
+      feedEl.innerHTML = `<div class="dm-empty">当前筛选条件下暂无${filterCoin ? ` ${esc(filterCoin)}` : ""} 爆仓或巨鲸异动记录</div>`;
+      return;
+    }
+
+    feedEl.innerHTML = rows
+      .slice(0, 42)
+      .map((r) => {
+        if (r.kind === "LIQ") {
+          const ev = r.data;
+          const isLong = ev.side === "LONG";
+          const pxLabel = ev.px_kind ? `${ev.px_kind} ` : "@ ";
+          const pxTxt = ev.px ? ` · ${pxLabel}${fmtPxShort(ev.px)}` : "";
+          const timeLbl = r.live
+            ? `<span class="liq-tag liq-tag-live">实时</span><span class="liq-ts">${esc(fmtBarrageTime(ev.ts))}</span>`
+            : `<span class="liq-ts">${esc(fmtBarrageTime(ev.ts))}</span>`;
+          return `
+            <div class="liq-item ${isLong ? "kind-liq-long" : "kind-liq-short"}">
+              <div class="liq-item-top">
+                <span class="liq-tag ${isLong ? "liq-tag-long" : "liq-tag-short"}">${isLong ? "爆多" : "爆空"}</span>
+                <span class="liq-ex-pill">${esc(ev.ex_short || ev.ex || "CEX")}</span>
+                <span class="liq-coin-lbl">${esc(ev.coin)}</span>
+                ${timeLbl}
+              </div>
+              <div class="liq-item-body">
+                ${isLong ? "多单强平" : "空单强平"} <b class="${isLong ? "ok" : "risk"}">${fmtCompact(ev.usd)}</b><span class="mono muted">${esc(pxTxt)}</span>
+              </div>
+            </div>`;
+        }
+        if (r.kind === "WICK") {
+          const wk = r.data;
+          const tagTxt = wk.kind === "WICK_UP" || wk.kind === "WICK_DOWN" ? "插针预警" : "爆仓波峰";
+          return `
+            <div class="liq-item kind-wick">
+              <div class="liq-item-top">
+                <span class="liq-tag liq-tag-wick">${tagTxt}</span>
+                <span class="liq-coin-lbl">${esc(wk.coin)}</span>
+                <span class="liq-ts">${esc(fmtBarrageTime(wk.ts))}</span>
+              </div>
+              <div class="liq-item-body"><b>${esc(wk.title)}</b>${wk.detail ? `<div class="muted small">${esc(wk.detail)}</div>` : ""}</div>
+            </div>`;
+        }
+        const mv = r.data;
+        const winTxt = mv.delta_window_h ? `${mv.delta_window_h}h · 快照` : "快照";
+        const dirTxt = mv.side === "LONG" ? "多" : "空";
+        return `
+          <div class="liq-item kind-whale" data-ent-id="${esc(mv.id)}" title="点击查看该实盘巨鲸完整持仓档案">
+            <div class="liq-item-top">
+              <span class="liq-tag liq-tag-whale">巨鲸调仓</span>
+              <span class="liq-ex-pill">${esc(mv.tier_code)}级</span>
+              <span class="liq-coin-lbl">${esc(mv.display)}</span>
+              <span class="liq-ts">${esc(winTxt)}</span>
+            </div>
+            <div class="liq-item-body">
+              主仓 ${esc(mv.coin)}（偏${dirTxt}）<b>${esc(mv.action)}</b> · 全账户净变动 <b class="${mv.delta_usd >= 0 ? "ok" : "risk"}">${fmtSignedCompact(mv.delta_usd)}</b>
+            </div>
+          </div>`;
+      })
+      .join("");
+  }
+
   /* ---------- Lifecycle & Event Wiring ---------- */
   function startArena() {
     if (!war.canvas) {
@@ -2747,11 +3542,15 @@
     resizeCanvas();
     rebuildCarriers();
     renderWhalePanels();
+    renderLiqMagnet();
+    renderLiqRail();
     if (!war.running) {
       war.running = true;
+      war.okxCtValAttempts = 0;
       war.lastFrameTs = performance.now();
       war.rafId = requestAnimationFrame(tick);
       connectSockets();
+      connectLiqSockets();
       startBarragePolling();
       loadYouTubeApi(4500).catch(() => {});
       if (!war.userMuted && !document.hidden && (war.soundOn || war.pausedByHidden)) {
@@ -2764,7 +3563,12 @@
     war.running = false;
     if (war.rafId) cancelAnimationFrame(war.rafId);
     war.rafId = null;
+    if (war.liqRailRafId !== null) {
+      cancelAnimationFrame(war.liqRailRafId);
+      war.liqRailRafId = null;
+    }
     disconnectSockets();
+    disconnectLiqSockets();
     stopBarragePolling();
     disarmGestureUnlock();
     stopAnthem(true);
@@ -2783,7 +3587,55 @@
       war.rings = [];
       rebuildCarriers();
       renderWhalePanels();
+      renderLiqMagnet();
+      renderLiqRail();
       if (war.running) connectSockets();
+    });
+
+    $("war-rail-tabs")?.addEventListener("click", (e) => {
+      const btn = e.target.closest(".seg-btn");
+      if (!btn || !btn.dataset.rail) return;
+      setRailTab(btn.dataset.rail);
+    });
+
+    $("liq-win-group")?.addEventListener("click", (e) => {
+      const btn = e.target.closest(".seg-btn");
+      if (!btn || !["1h", "24h"].includes(btn.dataset.win)) return;
+      war.liqWin = btn.dataset.win;
+      $("liq-win-group").querySelectorAll(".seg-btn").forEach((b) => b.classList.toggle("active", b === btn));
+      renderLiqRail();
+    });
+
+    $("liq-scope-group")?.addEventListener("click", (e) => {
+      const btn = e.target.closest(".seg-btn");
+      if (!btn || !["COIN", "ALL"].includes(btn.dataset.scope)) return;
+      war.liqScope = btn.dataset.scope;
+      $("liq-scope-group").querySelectorAll(".seg-btn").forEach((b) => b.classList.toggle("active", b === btn));
+      renderLiqRail();
+    });
+
+    $("liq-feed-filter")?.addEventListener("click", (e) => {
+      const btn = e.target.closest(".seg-btn");
+      if (!btn || !["ALL", "LIQ", "WHALE", "WICK"].includes(btn.dataset.kind)) return;
+      war.liqTypeFilter = btn.dataset.kind;
+      $("liq-feed-filter").querySelectorAll(".seg-btn").forEach((b) => b.classList.toggle("active", b === btn));
+      renderLiqRail();
+    });
+
+    const openWhaleById = (entId) => {
+      if (!entId) return;
+      const ent = (war.data?.flagships || []).find((f) => f.id === entId);
+      if (ent) openEntityDrawer(ent);
+    };
+
+    $("war-mag-ticks")?.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-ent-id]");
+      if (btn) openWhaleById(btn.dataset.entId);
+    });
+
+    $("war-liq-feed")?.addEventListener("click", (e) => {
+      const row = e.target.closest(".liq-item.kind-whale[data-ent-id]");
+      if (row) openWhaleById(row.dataset.entId);
     });
 
     $("war-cohort-tabs")?.addEventListener("click", (e) => {
@@ -2831,6 +3683,7 @@
 
     syncAudioUi();
     syncDanmakuToggleUi();
+    setRailTab(war.railTab);
     applyComposeSide(barrage.composeSide);
 
     const savedNick = safeStoreGet("danclub_barrage_nick", "");
@@ -3036,6 +3889,9 @@
       war.data = whaleData;
       rebuildCarriers();
       renderWhalePanels();
+      renderLiqMagnet();
+      renderLiqRail();
+      updateLiqWsUi();
     },
     setActive(active) {
       if (active) startArena();

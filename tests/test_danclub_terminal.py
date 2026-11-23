@@ -890,6 +890,109 @@ class TestExporterIntegrityAndHygiene(unittest.TestCase):
         ):
             self.assertIn(needle, app_js)
 
+    def test_v1_liquidation_exporter_whale_magnets_and_war_ui(self) -> None:
+        now = 1795430000
+        with tempfile.TemporaryDirectory() as td:
+            d = Path(td)
+            # 1. Seed mock CoinGlass liquidation.db with real-format events + ignored leveraged ETF + wick alert
+            c = sqlite3.connect(str(d / "liquidation.db"))
+            c.executescript(
+                """
+                CREATE TABLE liq_events (ts INT, exchange TEXT, coin TEXT, side TEXT, usd REAL, px REAL);
+                CREATE TABLE alerts (id INTEGER PRIMARY KEY, ts INT, alert_key TEXT, level TEXT, message TEXT);
+                """
+            )
+            c.execute("INSERT INTO liq_events VALUES (?, 'CG:Hyperliquid', 'BTC', 'short', 1500000.0, 62000.0)", (now - 1200,))
+            c.execute("INSERT INTO liq_events VALUES (?, 'CG:Binance', 'BTC', 'long', 500000.0, 61000.0)", (now - 7200,))
+            c.execute("INSERT INTO liq_events VALUES (?, 'CG:OKX', 'ETH', 'short', 400000.0, 1750.0)", (now - 600,))
+            c.execute("INSERT INTO liq_events VALUES (?, 'CG:Binance', 'SOXL', 'long', 999999.0, 30.0)", (now - 300,))
+            # Future row (+120s) MUST NOT enter [now-86400, now] totals; 4050 extra small rows MUST NOT be truncated!
+            c.execute("INSERT INTO liq_events VALUES (?, 'CG:Binance', 'BTC', 'long', 888888.0, 61000.0)", (now + 120,))
+            c.executemany(
+                "INSERT INTO liq_events VALUES (?, 'CG:Gate', 'SOL', 'long', 1000.0, 72.0)",
+                [(now - 100 - (i % 1000),) for i in range(4050)],
+            )
+            c.execute(
+                "INSERT INTO alerts VALUES (1, ?, 'wick_up:ETH', 'major', ?)",
+                (now - 900, "📍💥【向上插针爆空】ETH\n• 针尖高点 $1,752 → 现价 $1,733\n• 爆空 1,999万美元（非投资建议）"),
+            )
+            c.commit()
+            c.close()
+
+            liq = exp.export_liquidations(d, now_sec=now)
+            self.assertTrue(liq["available"])
+            self.assertEqual(liq["exchanges_count"], 4)
+            # SOXL leveraged ETF and future +120s row MUST be excluded; all 4050 SOL rows MUST be counted!
+            self.assertEqual(liq["windows"]["24h"]["ALL"]["total_usd"], 2400000.0 + 4050000.0)
+            self.assertEqual(liq["windows"]["24h"]["SOL"]["count"], 4050)
+            self.assertEqual(liq["windows"]["24h"]["BTC"]["short_usd"], 1500000.0)
+            self.assertEqual(liq["windows"]["24h"]["BTC"]["long_usd"], 500000.0)
+            self.assertEqual(liq["windows"]["1h"]["BTC"]["short_usd"], 1500000.0)
+            self.assertEqual(liq["windows"]["1h"]["BTC"]["long_usd"], 0.0)
+            self.assertEqual(liq["windows"]["24h"]["BTC"]["top_exchanges"][0]["ex"], "HL")
+            self.assertEqual(liq["windows"]["24h"]["BTC"]["top_exchanges"][0]["pct"], 75.0)
+            # Detail list still strictly >= $25K only (excludes the 4050 $1K small events!)
+            self.assertEqual(len(liq["recent_events"]), 3)
+            self.assertEqual(len(liq["wick_alerts"]), 1)
+            self.assertEqual(liq["wick_alerts"][0]["kind"], "WICK_UP")
+            self.assertNotIn("非投资建议", liq["wick_alerts"][0]["detail"])
+
+            # 2. Seed whale_intel.db with single-venue Red-HP flagship + recent move
+            wdb = d / "whale_v1.db"
+            wc = sqlite3.connect(str(wdb))
+            wc.executescript(
+                """
+                CREATE TABLE address_registry (identifier TEXT, entity_cluster_id TEXT, entity_label TEXT, external_labels_json TEXT);
+                CREATE TABLE onchain_profiles (
+                    identifier TEXT, hl_found INT, hl_display_name TEXT, hl_alltime_pnl REAL,
+                    hl_month_pnl REAL, hl_week_pnl REAL, hl_account_value REAL,
+                    hl_positions_json TEXT, hl_hip3_positions_json TEXT, aster_positions_json TEXT
+                );
+                CREATE TABLE live_ls_snapshots (ts INT, cohort TEXT, coin TEXT, long_entities INT, short_entities INT, balanced_entities INT, headcount_long_pct REAL, long_usd REAL, short_usd REAL, net_usd REAL, notional_long_pct REAL, btc_price REAL, eth_price REAL);
+                CREATE TABLE live_entity_pos_history (ts INT, entity_cluster_id TEXT, tier TEXT, coin TEXT, szi REAL, signed_ntl_usd REAL, mark_px REAL);
+                """
+            )
+            wc.execute("INSERT INTO address_registry VALUES ('0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'ent_red', 'priv', '[]')")
+            wc.execute(
+                "INSERT INTO onchain_profiles VALUES (?, 1, 'RedBoss', -5e6, -1e6, -5e5, 3e6, ?, '[]', '[]')",
+                (
+                    "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    json.dumps([{"coin": "BTC", "side": "SHORT", "szi": -300.0, "ntl_usd": 18000000.0, "entry_px": 59000.0, "liq_px": 62100.0, "upnl": -300000.0, "lev": 40, "lev_type": "cross"}]),
+                ),
+            )
+            wc.execute("INSERT INTO live_entity_pos_history VALUES (?, 'ent_red', 'C_COUNTER_WHALE', 'BTC', -100.0, -6000000.0, 60000.0)", (now - 7200,))
+            wc.execute("INSERT INTO live_entity_pos_history VALUES (?, 'ent_red', 'C_COUNTER_WHALE', 'BTC', -300.0, -18000000.0, 60000.0)", (now,))
+            wc.commit()
+            wc.close()
+
+            w = wexp.export_whales(wdb)
+            btc_mag = w["liq_magnets"]["BTC"]
+            self.assertEqual(btc_mag["short_wall"]["nearest_px"], 62100.0)
+            self.assertAlmostEqual(btc_mag["short_wall"]["nearest_dist_pct"], 3.5, places=1)
+            self.assertEqual(btc_mag["short_wall"]["within_10pct_usd"], 18000000.0)
+            self.assertEqual(len(w["recent_moves"]), 1)
+            self.assertEqual(w["recent_moves"][0]["action"], "加仓")
+
+        # 3. Verify V1 UI elements & strict ctVal guard in war_arena.js
+        html = (ROOT / "site" / "index.html").read_text(encoding="utf-8")
+        war_js = (ROOT / "site" / "assets" / "war_arena.js").read_text(encoding="utf-8")
+        for needle in ('id="war-liq-magnet"', 'id="war-rail-tabs"', 'id="war-rail-liq"', 'id="war-liq-feed"', 'id="liq-scope-group"'):
+            self.assertIn(needle, html)
+        for needle in (
+            "ensureOkxCtValMap",
+            "connectOkxLiqSocket",
+            "connectBnLiqSocket",
+            "bnLiqReconnectTimer",
+            "liqWsOkxSubscribed",
+            "getMatchedLivePx",
+            "scheduleLiqRailRender",
+            "usedLiveIdx",
+            "renderLiqMagnet",
+            "renderLiqRail",
+            "liveWhaleDistPct",
+        ):
+            self.assertIn(needle, war_js)
+
 
 if __name__ == "__main__":
     unittest.main()

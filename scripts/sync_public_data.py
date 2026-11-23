@@ -1001,6 +1001,159 @@ def _clean_bundle(bundle: dict[str, Any], *, blocklist_path: Path | None = None)
             fl["x_url"] = ""
         _require_bounded_int(fl.get("addr_count", 1), f"whales.flagships[{i}].addr_count", 1, 1000)
 
+    # Strict allowlist reconstruction for derived recent_moves, liq_magnets & CoinGlass liquidations
+    valid_flagship_ids = {str(fl.get("id") or "") for fl in whales.get("flagships", []) if isinstance(fl, dict) and fl.get("id")}
+    clean_moves = []
+    for mv in whales.get("recent_moves") or []:
+        if not isinstance(mv, dict):
+            continue
+        mid = sanitize_text(mv.get("id"), max_len=24)
+        disp = sanitize_text(mv.get("display"), max_len=40)
+        if not disp or mid not in valid_flagship_ids:
+            continue
+        clean_moves.append({
+            "id": mid,
+            "display": disp,
+            "tier_code": sanitize_text(mv.get("tier_code"), max_len=4),
+            "tier_label": sanitize_text(mv.get("tier_label"), max_len=24),
+            "coin": sanitize_text(mv.get("coin"), max_len=20),
+            "side": "LONG" if str(mv.get("side") or "").upper() == "LONG" else "SHORT",
+            "action": sanitize_text(mv.get("action"), max_len=12),
+            "delta_usd": mv.get("delta_usd"),
+            "delta_window_h": mv.get("delta_window_h"),
+            "net_usd": mv.get("net_usd"),
+            "ts": int(mv.get("ts") or 0),
+        })
+    whales["recent_moves"] = clean_moves[:15]
+
+    clean_mags: dict[str, Any] = {}
+    if isinstance(whales.get("liq_magnets"), dict):
+        for m_coin, mag in whales["liq_magnets"].items():
+            if not isinstance(mag, dict):
+                continue
+            mc = sanitize_text(str(m_coin), max_len=16)
+            if not mc:
+                continue
+            m_out: dict[str, Any] = {
+                "mark_px": mag.get("mark_px"),
+                "source": sanitize_text(mag.get("source"), max_len=48),
+            }
+            for wall_k in ("long_wall", "short_wall"):
+                wall = mag.get(wall_k)
+                if not isinstance(wall, dict):
+                    continue
+                t_list = []
+                for tgt in wall.get("targets") or []:
+                    if not isinstance(tgt, dict):
+                        continue
+                    tid = sanitize_text(tgt.get("id"), max_len=24)
+                    tdisp = sanitize_text(tgt.get("display"), max_len=40)
+                    if not tdisp or tid not in valid_flagship_ids:
+                        continue
+                    t_list.append({
+                        "id": tid,
+                        "display": tdisp,
+                        "tier_code": sanitize_text(tgt.get("tier_code"), max_len=4),
+                        "liq_px": tgt.get("liq_px"),
+                        "dist_pct": tgt.get("dist_pct"),
+                        "usd": tgt.get("usd"),
+                        "lev": tgt.get("lev"),
+                        "venue": sanitize_text(tgt.get("venue"), max_len=16),
+                    })
+                m_out[wall_k] = {
+                    "nearest_px": wall.get("nearest_px"),
+                    "nearest_dist_pct": wall.get("nearest_dist_pct"),
+                    "within_10pct_usd": wall.get("within_10pct_usd", 0.0),
+                    "within_10pct_count": int(wall.get("within_10pct_count") or 0),
+                    "within_25pct_usd": wall.get("within_25pct_usd", 0.0),
+                    "within_25pct_count": int(wall.get("within_25pct_count") or 0),
+                    "targets": t_list[:6],
+                }
+            clean_mags[mc] = m_out
+    whales["liq_magnets"] = clean_mags
+
+    liq = whales.get("liquidations")
+    if liq is None and isinstance(bundle.get("liquidations"), dict):
+        liq = bundle["liquidations"]
+    if isinstance(liq, dict):
+        _require_bounded_int(liq.get("exchanges_count", 0), "whales.liquidations.exchanges_count", 0, 50)
+        clean_liq_evs = []
+        for ev in liq.get("recent_events") or []:
+            if not isinstance(ev, dict):
+                continue
+            ec = sanitize_text(ev.get("coin"), max_len=16)
+            if not ec:
+                continue
+            clean_liq_evs.append({
+                "ts": int(ev.get("ts") or 0),
+                "ex": sanitize_text(ev.get("ex"), max_len=24),
+                "ex_short": sanitize_text(ev.get("ex_short"), max_len=12),
+                "coin": ec,
+                "side": "LONG" if str(ev.get("side") or "").upper() == "LONG" else "SHORT",
+                "usd": ev.get("usd"),
+                "px": ev.get("px"),
+            })
+        clean_wicks = []
+        for wk in liq.get("wick_alerts") or []:
+            if not isinstance(wk, dict):
+                continue
+            wt = sanitize_text(wk.get("title"), max_len=84)
+            if not wt:
+                continue
+            clean_wicks.append({
+                "ts": int(wk.get("ts") or 0),
+                "coin": sanitize_text(wk.get("coin"), max_len=16),
+                "kind": sanitize_text(wk.get("kind"), max_len=16),
+                "level": "major" if str(wk.get("level") or "").lower() == "major" else "normal",
+                "title": wt,
+                "detail": sanitize_text(wk.get("detail"), max_len=180),
+            })
+        clean_wins: dict[str, dict[str, Any]] = {}
+        if isinstance(liq.get("windows"), dict):
+            for wn in ("1h", "24h"):
+                wmap = liq["windows"].get(wn)
+                if not isinstance(wmap, dict):
+                    continue
+                clean_wins[wn] = {}
+                for sc in ("ALL", "BTC", "ETH", "SOL", "HYPE"):
+                    b = wmap.get(sc)
+                    if not isinstance(b, dict):
+                        continue
+                    top_ex_clean = []
+                    for tx in (b.get("top_exchanges") or [])[:4]:
+                        if isinstance(tx, dict):
+                            top_ex_clean.append({
+                                "ex": sanitize_text(tx.get("ex"), max_len=12),
+                                "usd": tx.get("usd"),
+                                "pct": tx.get("pct"),
+                            })
+                    clean_wins[wn][sc] = {
+                        "long_usd": b.get("long_usd", 0.0),
+                        "short_usd": b.get("short_usd", 0.0),
+                        "total_usd": b.get("total_usd", 0.0),
+                        "count": _require_bounded_int(int(b.get("count") or 0), f"whales.liquidations.windows.{wn}.{sc}.count", 0, 10_000_000),
+                        "top_exchanges": top_ex_clean,
+                    }
+        whales["liquidations"] = {
+            "available": bool(liq.get("available")),
+            "source": sanitize_text(liq.get("source"), max_len=48) or "CoinGlass 全网永续强平统计",
+            "updated_at": int(liq.get("updated_at") or 0),
+            "exchanges_count": int(liq.get("exchanges_count") or 0),
+            "windows": clean_wins,
+            "recent_events": clean_liq_evs[:40],
+            "wick_alerts": clean_wicks[:10],
+        }
+    else:
+        whales["liquidations"] = {
+            "available": False,
+            "source": "CoinGlass 全网永续强平统计",
+            "updated_at": 0,
+            "exchanges_count": 0,
+            "windows": {},
+            "recent_events": [],
+            "wick_alerts": [],
+        }
+
     # Inject Smart-vs-Counter extreme whale divergence signal into Overview desk_signals (top-of-screen hook!)
     btc_coh = (whales.get("cohorts") or {}).get("BTC") or {}
     div = btc_coh.get("divergence")
