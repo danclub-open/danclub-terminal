@@ -5,13 +5,14 @@
   const $ = (id) => document.getElementById(id);
   const COINS = ["BTC", "ETH", "SOL", "HYPE"];
 
-  /* 5 International Climax War Anthems (Public Domain / CC-BY Wikimedia Commons, 24-26s peak cuts) */
+  /* 6-Track Climax War Anthem Roster: Track #1 official YouTube embed (copyright-compliant) + 5 Public Domain/CC-BY MP3s */
   const WAR_TRACKS = [
-    { id: "valkyries",    file: "./assets/audio/valkyries.mp3",    label: "🇩🇪 德 · 女武神的骑行 (25s)", short: "🇩🇪 女武神的骑行", dur: 25 },
-    { id: "1812_cannon",  file: "./assets/audio/1812_cannon.mp3",  label: "🇷🇺 俄 · 1812礼炮终章 (26s)", short: "🇷🇺 1812礼炮终章", dur: 26 },
-    { id: "william_tell", file: "./assets/audio/william_tell.mp3", label: "🇮🇹 意 · 威廉退尔冲锋 (25s)", short: "🇮🇹 威廉退尔冲锋", dur: 25 },
-    { id: "toreador",     file: "./assets/audio/toreador.mp3",     label: "🇫🇷 法 · 卡门斗牛士 (26s)",   short: "🇫🇷 卡门斗牛士",   dur: 26 },
-    { id: "mars_war",     file: "./assets/audio/mars_war.mp3",     label: "🇬🇧 英 · 火星战争使者 (24s)", short: "🇬🇧 火星战争使者", dur: 24 },
+    { id: "yt_heimat",    type: "youtube", videoId: "3183AsHdVGY", startSec: 45, endSec: 75, label: "🇩🇪 大德意志是我的家乡 (30s高潮)", short: "🇩🇪 大德意志是我的家乡", dur: 30 },
+    { id: "valkyries",    type: "audio",   file: "./assets/audio/valkyries.mp3",    label: "🇩🇪 德 · 女武神的骑行 (25s)", short: "🇩🇪 女武神的骑行", dur: 25 },
+    { id: "1812_cannon",  type: "audio",   file: "./assets/audio/1812_cannon.mp3",  label: "🇷🇺 俄 · 1812礼炮终章 (26s)", short: "🇷🇺 1812礼炮终章", dur: 26 },
+    { id: "william_tell", type: "audio",   file: "./assets/audio/william_tell.mp3", label: "🇮🇹 意 · 威廉退尔冲锋 (25s)", short: "🇮🇹 威廉退尔冲锋", dur: 25 },
+    { id: "toreador",     type: "audio",   file: "./assets/audio/toreador.mp3",     label: "🇫🇷 法 · 卡门斗牛士 (26s)",   short: "🇫🇷 卡门斗牛士",   dur: 26 },
+    { id: "mars_war",     type: "audio",   file: "./assets/audio/mars_war.mp3",     label: "🇬🇧 英 · 火星战争使者 (24s)", short: "🇬🇧 火星战争使者", dur: 24 },
   ];
 
   function safeStoreGet(key, fallback = null) {
@@ -80,11 +81,21 @@
     search: "",
     soundOn: true, // Default ON: auto-plays on load or instantaneously unlocks on first gesture!
     userMuted: false,
+    hasUserGesture: false,
     autoUnlockArmed: false,
     localBlobUrl: null,
     volume: readSavedVolume(),
-    trackIdx: Math.floor(Math.random() * WAR_TRACKS.length),
+    trackIdx: 0, // Default #1: 大德意志是我的家乡
     bgm: null,
+    ytApiPromise: null,
+    ytPlayer: null,
+    ytReady: false,
+    ytUnavailable: false,
+    ytFallbackTimer: null,
+    ytBufferTimer: null,
+    ytInstanceGen: 0,
+    ytHasPlayedThisSeq: false,
+    ytActiveSeq: 0,
     playSeq: 0,
     audioErrCount: 0,
     needsAudioReload: false,
@@ -188,23 +199,176 @@
     return `${mm}-${dd} ${hh}:${mi}`;
   };
 
-  /* ---------- 5-Nation War Anthem Radio + Procedural Combat SFX ---------- */
-  function ensureAudioElement() {
-    if (war.bgm) return war.bgm;
+  /* ---------- 6-Track Hybrid War Anthem Radio (Official YouTube IFrame + Local MP3) + SFX ---------- */
+  function setYtPipOpen(open, titleText = null) {
+    const pip = $("war-yt-pip");
+    if (!pip) return;
+    pip.classList.toggle("open", Boolean(open));
+    if (titleText) {
+      const t = pip.querySelector(".war-yt-pip-title");
+      if (t) t.textContent = titleText;
+    }
+  }
+
+  function clearYtTimers() {
+    if (war.ytFallbackTimer) {
+      clearTimeout(war.ytFallbackTimer);
+      war.ytFallbackTimer = null;
+    }
+    if (war.ytBufferTimer) {
+      clearTimeout(war.ytBufferTimer);
+      war.ytBufferTimer = null;
+    }
+  }
+
+  function applyYtVolume() {
+    if (!war.ytPlayer || !war.ytReady) return;
+    try {
+      const volPct = Math.round(war.volume * 100);
+      war.ytPlayer.setVolume(volPct);
+      if (volPct <= 1) war.ytPlayer.mute();
+      else war.ytPlayer.unMute();
+    } catch {}
+  }
+
+  function destroyYouTubePlayer(hidePip = true) {
+    clearYtTimers();
+    war.ytInstanceGen += 1;
+    war.ytActiveSeq = -1;
+    war.ytHasPlayedThisSeq = false;
+    const oldPlayer = war.ytPlayer;
+    war.ytPlayer = null;
+    war.ytReady = false;
+    if (oldPlayer) {
+      try {
+        oldPlayer.stopVideo?.();
+      } catch {}
+      try {
+        oldPlayer.destroy?.();
+      } catch {}
+    }
+    const body = document.querySelector("#war-yt-pip .war-yt-pip-body");
+    if (body) {
+      body.innerHTML = '<div id="war-yt-player"></div>';
+    }
+    if (hidePip) setYtPipOpen(false);
+  }
+
+  function stopYouTubePlayer(hidePip = true, forceDestroy = false) {
+    clearYtTimers();
+    war.ytActiveSeq = -1;
+    war.ytHasPlayedThisSeq = false;
+    if (forceDestroy || !war.ytReady) {
+      destroyYouTubePlayer(hidePip);
+      return;
+    }
+    if (war.ytPlayer && war.ytReady) {
+      try {
+        war.ytPlayer.pauseVideo();
+      } catch {}
+    }
+    if (hidePip) setYtPipOpen(false);
+  }
+
+  function loadYouTubeApi(timeoutMs = 4500) {
+    if (window.YT && typeof window.YT.Player === "function") {
+      return Promise.resolve(window.YT);
+    }
+    if (war.ytApiPromise) return war.ytApiPromise;
+    war.ytApiPromise = new Promise((resolve, reject) => {
+      let settled = false;
+      let scriptEl = null;
+      const done = (ok, val) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (ok) {
+          resolve(val);
+        } else {
+          if (scriptEl && scriptEl.parentNode) {
+            scriptEl.parentNode.removeChild(scriptEl);
+          }
+          war.ytApiPromise = null;
+          reject(val);
+        }
+      };
+      const timer = setTimeout(() => done(false, new Error("yt_api_timeout")), timeoutMs);
+
+      const prevReady = window.onYouTubeIframeAPIReady;
+      const onReadyHook = () => {
+        if (typeof prevReady === "function") {
+          try { prevReady(); } catch {}
+        }
+        if (!settled && window.YT && typeof window.YT.Player === "function") {
+          done(true, window.YT);
+        }
+      };
+      window.onYouTubeIframeAPIReady = onReadyHook;
+
+      const existing = document.querySelector('script[data-danclub-yt-api="1"]');
+      if (existing) {
+        scriptEl = existing;
+      } else {
+        scriptEl = document.createElement("script");
+        scriptEl.src = "https://www.youtube.com/iframe_api";
+        scriptEl.async = true;
+        scriptEl.dataset.danclubYtApi = "1";
+        scriptEl.onerror = () => done(false, new Error("yt_api_error"));
+        document.head.appendChild(scriptEl);
+      }
+    });
+    return war.ytApiPromise;
+  }
+
+  function nextPlayableIdx(fromIdx) {
+    const n = WAR_TRACKS.length;
+    for (let step = 1; step <= n; step++) {
+      const idx = (fromIdx + step) % n;
+      const t = WAR_TRACKS[idx];
+      if (t && t.type === "youtube" && war.ytUnavailable) continue;
+      return idx;
+    }
+    return Math.min(1, n - 1);
+  }
+
+  function fallbackFromYouTube(seq, reasonText) {
+    if (war.playSeq !== seq) return;
+    destroyYouTubePlayer(true);
+    war.ytUnavailable = true;
+    const fallbackIdx = WAR_TRACKS.findIndex((t) => t.type !== "youtube");
+    if (fallbackIdx < 0) {
+      war.soundOn = false;
+      syncAudioUi(reasonText);
+      return;
+    }
+    war.trackIdx = fallbackIdx;
+    playCurrentAnthem(true, `${reasonText} · 已切至 ${WAR_TRACKS[fallbackIdx].short}`);
+  }
+
+  function createAudioElement(seq) {
+    if (war.bgm) {
+      try { war.bgm.pause(); } catch {}
+      war.bgm.dataset.playSeq = "";
+    }
     const el = new Audio();
     el.preload = "none";
     el.volume = war.volume;
+    el.dataset.playSeq = String(seq);
     el.addEventListener("ended", () => {
-      if (!war.soundOn || !war.running || document.hidden) return;
+      const cur = WAR_TRACKS[war.trackIdx];
+      if (el !== war.bgm || !war.soundOn || !war.running || document.hidden) return;
+      if (!cur || cur.type === "youtube" || el.dataset.playSeq !== String(war.playSeq)) return;
       war.audioErrCount = 0;
-      war.trackIdx = (war.trackIdx + 1) % WAR_TRACKS.length;
+      war.trackIdx = nextPlayableIdx(war.trackIdx);
       playCurrentAnthem(true);
     });
     el.addEventListener("error", () => {
-      if (!war.soundOn || !war.running || document.hidden || war.pausedByHidden) return;
+      const cur = WAR_TRACKS[war.trackIdx];
+      if (el !== war.bgm || !war.soundOn || !war.running || document.hidden || war.pausedByHidden) return;
+      if (!cur || cur.type === "youtube" || el.dataset.playSeq !== String(war.playSeq)) return;
       if (war.audioErrCount < 1) {
         war.audioErrCount += 1;
-        war.trackIdx = (war.trackIdx + 1) % WAR_TRACKS.length;
+        war.trackIdx = nextPlayableIdx(war.trackIdx);
         playCurrentAnthem(true);
       } else {
         war.soundOn = false;
@@ -231,7 +395,7 @@
     }
     if (btn) {
       btn.textContent = war.soundOn ? "⏸ 关闭战歌" : "▶ 开启战歌";
-      btn.title = war.soundOn ? "点击立即暂停并关闭背景战歌与空战音效" : "点击开启五国背景战歌与空战音效";
+      btn.title = war.soundOn ? "点击立即暂停并关闭背景战歌与空战音效" : "点击开启多国高潮战歌与空战音效";
       btn.classList.toggle("active", war.soundOn);
     }
     if (prompt) {
@@ -241,9 +405,10 @@
       if (customStatus) {
         status.textContent = customStatus;
       } else if (war.soundOn) {
-        status.textContent = `正在轮播 [${war.trackIdx + 1}/${WAR_TRACKS.length}] ${track.short} · 高潮 ${track.dur}s`;
+        const srcTag = track.type === "youtube" ? "YouTube 官方高潮" : "高潮";
+        status.textContent = `正在轮播 [${war.trackIdx + 1}/${WAR_TRACKS.length}] ${track.short} · ${srcTag} ${track.dur}s`;
       } else {
-        status.textContent = "5 首多国交响战歌高潮待命 · 自动轮播";
+        status.textContent = `首曲：${track.short} · 点击「开启战歌」或页面任意处开播`;
       }
     }
   }
@@ -266,7 +431,8 @@
       if (ev.type === "keydown" && t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) {
         return;
       }
-      if (t && typeof t.closest === "function" && t.closest("#btn-war-sound, #war-audio-prompt, #war-local-file, .war-local-btn, #war-track-select, #btn-war-next-track")) {
+      war.hasUserGesture = true;
+      if (t && typeof t.closest === "function" && t.closest("#btn-war-sound, #war-audio-prompt, #war-local-file, .war-local-btn, #war-track-select, #btn-war-next-track, #war-yt-pip")) {
         disarmGestureUnlock();
         return;
       }
@@ -280,24 +446,123 @@
     window.addEventListener("keydown", _gestureUnlockHandler, true);
   }
 
-  function playCurrentAnthem(forceReload = false) {
-    const el = ensureAudioElement();
-    const track = WAR_TRACKS[war.trackIdx] || WAR_TRACKS[0];
-    const seq = ++war.playSeq;
-    el.volume = war.volume;
-
-    if (forceReload || war.needsAudioReload || el.error || el.dataset.trackId !== track.id) {
-      war.needsAudioReload = false;
-      el.dataset.trackId = track.id;
-      el.src = track.file;
-      el.load();
-      el.currentTime = 0;
+  function playYouTubeTrack(track, seq, forceReload = false) {
+    if (war.bgm) {
+      war.bgm.dataset.playSeq = "";
+      try { war.bgm.pause(); } catch {}
     }
+
+    if (!war.hasUserGesture) {
+      war.soundOn = false;
+      armGestureUnlock();
+      syncAudioUi(`默认首曲：${track.short} · 点击页面任意处即刻开播`);
+      return;
+    }
+
+    // Every YouTube round gets a fresh player instance (new instGen) so stale onError/ENDED can never hit a new round
+    destroyYouTubePlayer(false);
 
     war.soundOn = true;
     war.pausedByHidden = false;
+    war.ytActiveSeq = seq;
+    war.ytHasPlayedThisSeq = false;
     disarmGestureUnlock();
-    syncAudioUi();
+    setYtPipOpen(true, `${track.short} · YouTube`);
+    syncAudioUi(`正在接入 YouTube 官方音源 · ${track.short}…`);
+
+    clearYtTimers();
+    war.ytFallbackTimer = setTimeout(() => {
+      fallbackFromYouTube(seq, "YouTube 音源连接超时（国内网络需代理）");
+    }, 6500);
+
+    loadYouTubeApi(4500)
+      .then((YT) => {
+        if (war.playSeq !== seq || !war.soundOn || !war.running || document.hidden) return;
+        const instGen = ++war.ytInstanceGen;
+        war.ytPlayer = new YT.Player("war-yt-player", {
+          width: "240",
+          height: "135",
+          videoId: track.videoId,
+          playerVars: {
+            autoplay: 0,
+            controls: 1,
+            rel: 0,
+            modestbranding: 1,
+            playsinline: 1,
+            start: track.startSec || 0,
+            end: track.endSec || undefined,
+            origin: window.location.origin,
+          },
+          events: {
+            onReady: (ev) => {
+              if (instGen !== war.ytInstanceGen) {
+                try { ev.target.destroy?.(); } catch {}
+                return;
+              }
+              war.ytReady = true;
+              applyYtVolume();
+              if (war.playSeq !== war.ytActiveSeq || !war.soundOn || !war.running || document.hidden) {
+                destroyYouTubePlayer(true);
+                return;
+              }
+              const activeTrack = WAR_TRACKS[war.trackIdx];
+              if (activeTrack && activeTrack.type === "youtube") {
+                try {
+                  ev.target.loadVideoById({
+                    videoId: activeTrack.videoId,
+                    startSeconds: activeTrack.startSec || 0,
+                    endSeconds: activeTrack.endSec || undefined,
+                  });
+                } catch {}
+              }
+            },
+            onStateChange: (ev) => {
+              if (instGen !== war.ytInstanceGen || war.playSeq !== war.ytActiveSeq) return;
+              const curSeq = war.ytActiveSeq;
+              if (ev.data === YT.PlayerState.PLAYING) {
+                clearYtTimers();
+                war.ytUnavailable = false;
+                war.ytHasPlayedThisSeq = true;
+                applyYtVolume();
+                syncAudioUi();
+              } else if (ev.data === YT.PlayerState.BUFFERING) {
+                if (war.ytHasPlayedThisSeq && war.soundOn && war.running && !document.hidden && !war.ytBufferTimer) {
+                  war.ytBufferTimer = setTimeout(() => {
+                    if (instGen === war.ytInstanceGen && war.playSeq === curSeq) {
+                      fallbackFromYouTube(curSeq, "YouTube 缓冲中断");
+                    }
+                  }, 7500);
+                }
+              } else if (ev.data === YT.PlayerState.PAUSED) {
+                if (war.ytBufferTimer) {
+                  clearTimeout(war.ytBufferTimer);
+                  war.ytBufferTimer = null;
+                }
+              } else if (ev.data === YT.PlayerState.ENDED) {
+                if (!war.ytHasPlayedThisSeq) return;
+                clearYtTimers();
+                destroyYouTubePlayer(true);
+                if (war.soundOn && war.running && !document.hidden) {
+                  war.trackIdx = nextPlayableIdx(war.trackIdx);
+                  playCurrentAnthem(true);
+                }
+              }
+            },
+            onError: () => {
+              if (instGen !== war.ytInstanceGen || war.playSeq !== war.ytActiveSeq) return;
+              fallbackFromYouTube(war.ytActiveSeq, "YouTube 音源受限");
+            },
+          },
+        });
+      })
+      .catch(() => {
+        fallbackFromYouTube(seq, "YouTube 音源未连通");
+      });
+  }
+
+  function playCurrentAnthem(forceReload = false, customStatus = null) {
+    const track = WAR_TRACKS[war.trackIdx] || WAR_TRACKS[0];
+    const seq = ++war.playSeq;
 
     try {
       if (!war.audioCtx) {
@@ -308,6 +573,32 @@
         war.audioCtx.resume().catch(() => {});
       }
     } catch {}
+
+    if (track.type === "youtube") {
+      playYouTubeTrack(track, seq, forceReload);
+      return;
+    }
+
+    // Synchronously destroy YouTube iframe before starting local MP3 -> zero dual-audio overlap!
+    destroyYouTubePlayer(true);
+    const needFreshEl =
+      !war.bgm || forceReload || war.needsAudioReload || war.bgm.error || war.bgm.dataset.trackId !== track.id;
+    const el = needFreshEl ? createAudioElement(seq) : war.bgm;
+    el.volume = war.volume;
+    el.dataset.playSeq = String(seq);
+
+    if (needFreshEl) {
+      war.needsAudioReload = false;
+      el.dataset.trackId = track.id;
+      el.src = track.file;
+      el.load();
+      el.currentTime = 0;
+    }
+
+    war.soundOn = true;
+    war.pausedByHidden = false;
+    disarmGestureUnlock();
+    syncAudioUi(customStatus);
 
     const p = el.play();
     if (p && typeof p.catch === "function") {
@@ -328,7 +619,9 @@
 
   function stopAnthem(keepPreference = false) {
     war.playSeq += 1;
+    destroyYouTubePlayer(!keepPreference);
     if (war.bgm) {
+      war.bgm.dataset.playSeq = "";
       try {
         war.bgm.pause();
       } catch {}
@@ -349,7 +642,7 @@
 
   function nextTrack(autoStart = true) {
     war.audioErrCount = 0;
-    war.trackIdx = (war.trackIdx + 1) % WAR_TRACKS.length;
+    war.trackIdx = nextPlayableIdx(war.trackIdx);
     if (autoStart || war.soundOn) {
       playCurrentAnthem(true);
     } else {
@@ -2453,6 +2746,7 @@
       war.rafId = requestAnimationFrame(tick);
       connectSockets();
       startBarragePolling();
+      loadYouTubeApi(4500).catch(() => {});
       if (!war.userMuted && !document.hidden && (war.soundOn || war.pausedByHidden)) {
         playCurrentAnthem(false);
       }
@@ -2586,6 +2880,7 @@
     });
 
     $("btn-war-sound")?.addEventListener("click", () => {
+      war.hasUserGesture = true;
       if (war.soundOn) {
         war.userMuted = true;
         disarmGestureUnlock();
@@ -2593,26 +2888,39 @@
       } else {
         war.userMuted = false;
         war.audioErrCount = 0;
+        if (WAR_TRACKS[war.trackIdx]?.type === "youtube") war.ytUnavailable = false;
         playCurrentAnthem(false);
       }
     });
 
+    $("btn-war-yt-close")?.addEventListener("click", () => {
+      war.hasUserGesture = true;
+      war.userMuted = true;
+      disarmGestureUnlock();
+      stopAnthem(false);
+    });
+
     $("war-audio-prompt")?.addEventListener("click", () => {
+      war.hasUserGesture = true;
       war.userMuted = false;
       war.audioErrCount = 0;
+      if (WAR_TRACKS[war.trackIdx]?.type === "youtube") war.ytUnavailable = false;
       playCurrentAnthem(false);
     });
 
     $("war-track-select")?.addEventListener("change", (e) => {
       const idx = Number(e.target.value);
       if (!Number.isInteger(idx) || idx < 0 || idx >= WAR_TRACKS.length) return;
+      war.hasUserGesture = true;
       war.userMuted = false;
       war.audioErrCount = 0;
+      if (WAR_TRACKS[idx]?.type === "youtube") war.ytUnavailable = false;
       war.trackIdx = idx;
       playCurrentAnthem(true);
     });
 
     $("btn-war-next-track")?.addEventListener("click", () => {
+      war.hasUserGesture = true;
       war.userMuted = false;
       nextTrack(true);
     });
@@ -2620,6 +2928,7 @@
     $("war-local-file")?.addEventListener("change", (e) => {
       const file = e.target.files?.[0];
       if (!file) return;
+      war.hasUserGesture = true;
       if (war.localBlobUrl) {
         try { URL.revokeObjectURL(war.localBlobUrl); } catch {}
       }
@@ -2628,6 +2937,7 @@
       const customIdx = WAR_TRACKS.findIndex((t) => t.id === "local_custom");
       const entry = {
         id: "local_custom",
+        type: "audio",
         file: war.localBlobUrl,
         label: `🎵 本地 · ${cleanName}`,
         short: `🎵 ${cleanName}`,
@@ -2658,9 +2968,8 @@
       if (!Number.isFinite(pct)) return;
       war.volume = Math.max(0, Math.min(1, pct / 100));
       if (war.bgm) war.bgm.volume = war.volume;
-      try {
-        localStorage.setItem("danclub_war_vol", String(war.volume));
-      } catch {}
+      applyYtVolume();
+      safeStoreSet("danclub_war_vol", war.volume);
     });
 
     document.addEventListener("visibilitychange", () => {

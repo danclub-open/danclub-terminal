@@ -255,15 +255,16 @@
             </div>
           </div>
 
-          <!-- 5-Nation Climax War Anthem & Combat Audio Deck -->
+          <!-- 6-Track Climax War Anthem & Combat Audio Deck -->
           <div class="war-audio-bar" id="war-audio-bar">
             <button class="btn btn-compact btn-war-audio" id="btn-war-sound" type="button" title="点击一键开启或关闭背景战歌与空战音效">▶ 开启战歌</button>
             <select class="war-track-select" id="war-track-select" aria-label="选择多国战歌高潮">
-              <option value="0">🇩🇪 德 · 女武神的骑行 (25s)</option>
-              <option value="1">🇷🇺 俄 · 1812礼炮终章 (26s)</option>
-              <option value="2">🇮🇹 意 · 威廉退尔冲锋 (25s)</option>
-              <option value="3">🇫🇷 法 · 卡门斗牛士 (26s)</option>
-              <option value="4">🇬🇧 英 · 火星战争使者 (24s)</option>
+              <option value="0" selected>🇩🇪 大德意志是我的家乡 (30s高潮)</option>
+              <option value="1">🇩🇪 德 · 女武神的骑行 (25s)</option>
+              <option value="2">🇷🇺 俄 · 1812礼炮终章 (26s)</option>
+              <option value="3">🇮🇹 意 · 威廉退尔冲锋 (25s)</option>
+              <option value="4">🇫🇷 法 · 卡门斗牛士 (26s)</option>
+              <option value="5">🇬🇧 英 · 火星战争使者 (24s)</option>
             </select>
             <button class="btn btn-compact" id="btn-war-next-track" type="button" title="切换下一首高潮战歌">切歌 ⏭</button>
             <label class="btn btn-compact war-local-btn" title="纯本地挂载任意 MP3 战歌，绝不上传服务器">
@@ -274,7 +275,7 @@
               <span class="muted small">音量</span>
               <input class="war-vol-slider" id="war-vol" type="range" min="0" max="100" value="75" aria-label="战歌音量" />
             </label>
-            <span class="war-now-playing mono small muted" id="war-audio-status">战歌默认开启 · 点击页面任意处即刻燃起</span>
+            <span class="war-now-playing mono small muted" id="war-audio-status">默认首曲：🇩🇪 大德意志是我的家乡 · 点击页面任意处开播</span>
           </div>
 
           <!-- Battle Power Bar -->
@@ -298,7 +299,7 @@
               <div class="war-canvas-wrap">
                 <canvas id="war-canvas"></canvas>
                 <button class="war-audio-prompt" id="war-audio-prompt" type="button">
-                  ▶ 点击燃起五国战歌高潮 &amp; 空战音效（5 首 24–26s 轮播）
+                  ▶ 点击燃起《大德意志是我的家乡》高潮 &amp; 多国战歌轮播
                 </button>
                 <div class="chart-tooltip" id="war-canvas-tip"></div>
               </div>
@@ -836,6 +837,17 @@
       <h4 class="subhead">近期全仓净敞口轨迹</h4>
       <div class="chart-box chart-sm" id="wd-chart"></div>
     </aside>
+
+    <!-- Official YouTube Mini Radio PiP (shown only while YouTube Track #1 plays) -->
+    <div class="war-yt-pip" id="war-yt-pip" aria-label="YouTube 官方战歌音源">
+      <div class="war-yt-pip-head">
+        <span class="war-yt-pip-title">🇩🇪 大德意志是我的家乡 · YouTube</span>
+        <button class="war-yt-pip-close" id="btn-war-yt-close" type="button" title="暂停并收起迷你电台">×</button>
+      </div>
+      <div class="war-yt-pip-body">
+        <div id="war-yt-player"></div>
+      </div>
+    </div>
 
     <footer class="footer">
       <div class="container footer-inner">

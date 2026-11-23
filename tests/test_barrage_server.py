@@ -250,7 +250,12 @@ class TestBarrageStoreAndHttp(unittest.TestCase):
         self.assertEqual(st_bad, 400)
 
         # Pre-thread bounded admission returns 503 immediately when saturated
-        self.assertTrue(self.server._conn_gate._value == bs.MAX_CONCURRENT_REQUESTS)
+        import time as _time
+        for _ in range(30):
+            if self.server._conn_gate._value == bs.MAX_CONCURRENT_REQUESTS:
+                break
+            _time.sleep(0.01)
+        self.assertEqual(self.server._conn_gate._value, bs.MAX_CONCURRENT_REQUESTS)
         sat_srv = bs.create_server("127.0.0.1", 0, self.store, max_concurrent=1)
         sat_port = sat_srv.server_address[1]
         sat_t = threading.Thread(target=sat_srv.serve_forever, daemon=True)
