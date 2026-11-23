@@ -35,11 +35,11 @@ def main() -> None:
     regime = overview.get("market_regime") or {}
     print(f"[Regime] {regime.get('label', '--')} | {regime.get('hint', '')}")
 
-    div = (whales.get("divergence") or {}).get("BTC") or {}
+    div = ((whales.get("cohorts") or {}).get("BTC") or {}).get("divergence") or {}
     if div:
         print(
             f"[Whale BTC Divergence] Smart={div.get('smart_long_pct')}% Long vs "
-            f"Counter={div.get('counter_long_pct')}% Long | Diff={div.get('diff_pct'):+.1f}% ({div.get('label')})"
+            f"Counter={div.get('counter_long_pct')}% Long | Spread={div.get('spread_pct'):+.1f}% ({div.get('label')})"
         )
 
     print("\nTop 8 Active Whale Flagships:")

@@ -55,7 +55,7 @@
 ```bash
 # 获取聪明钱 vs 反指巨鲸实时背离与前 5 大实盘旗舰
 curl -s https://danclub.duckdns.org/api/v1/whales.json | jq '{
-  btc_divergence: .divergence.BTC,
+  btc_divergence: .cohorts.BTC.divergence,
   top5: [.flagships[:5][] | {display, x_handle, tier: .tier_code, primary: .primary_coin, side: .primary_side, usd: .total_notional_usd}]
 }'
 
@@ -69,8 +69,8 @@ import json, urllib.request
 
 BASE = "https://danclub.duckdns.org/api/v1"
 whales = json.loads(urllib.request.urlopen(f"{BASE}/whales.json", timeout=10).read())
-div = whales["divergence"]["BTC"]
-print(f"BTC 巨鲸背离度: {div['diff_pct']:+.1f}% ({div['label']})")
+div = whales["cohorts"]["BTC"]["divergence"]
+print(f"BTC 巨鲸背离度: {div['spread_pct']:+.1f}% ({div['label']})")
 for f in whales["flagships"][:5]:
     x_tag = f" (@{f['x_handle']})" if f.get("x_handle") else ""
     print(f"- {f['display']}{x_tag} [{f['tier_code']}] {f['primary_coin']} {f['primary_side']} ${f['total_notional_usd']/1e6:.2f}M")
@@ -80,7 +80,7 @@ for f in whales["flagships"][:5]:
 ```js
 const res = await fetch("https://danclub.duckdns.org/api/v1/whales.json");
 const data = await res.json();
-console.log("Smart vs Counter (BTC):", data.divergence.BTC);
+console.log("Smart vs Counter (BTC):", data.cohorts.BTC.divergence);
 ```
 
 #### 4. 调用礼仪

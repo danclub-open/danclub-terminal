@@ -34,10 +34,10 @@ Manifest listing generation timestamps, schema version, and available endpoints.
 Entity-deduplicated whale positioning across Hyperliquid & HIP-3 (`xyz:`) TradFi perpetuals.
 
 - `stats`: `{ tracked_addresses, profiled_whales, active_entities, total_notional_usd, x_linked_count, snapshot_ts }`
-- `cohorts[coin]`: `ALL`, `BTC`, `ETH`, `HYPE`, `SOL` -> `{ SMART_SA, COUNTER_C, ALL_DIRECTIONAL }`, each containing:
+- `cohorts[coin]`: `ALL`, `BTC`, `ETH`, `HYPE`, `SOL` -> `{ SMART_SA, COUNTER_C, ALL_DIRECTIONAL, divergence }`, each cohort containing:
   - `long_entities`, `short_entities`, `balanced_entities`, `headcount_long_pct`, `long_usd`, `short_usd`, `net_usd`, `notional_long_pct`
-- `divergence[coin]`: `{ smart_long_pct, counter_long_pct, diff_pct, level, label }`
-- `series[coin][]`: 15-minute historical snapshots `{ ts, smart_long_pct, counter_long_pct, diff_pct, btc_price }`
+  - `divergence`: `{ smart_long_pct, counter_long_pct, spread_pct, tone, label }`
+- `series[coin][]`: 15-minute historical snapshots `{ ts, smart_long_pct, counter_long_pct, smart_net_usd, counter_net_usd, btc_price }`
 - `flagships[]`: Top 40 active deduplicated directional whale entities:
   - `id`, `display`, `short_addr`, `addr_count`
   - `x_handle` *(string or `null`, verified public X handle without `@`)*, `x_url` *(`https://x.com/<handle>` or `""`)*
@@ -86,5 +86,5 @@ Cross-market trader decision layer.
 ## 7. `GET /feed.json`
 Multi-source categorized real-time market wire (fusing Equation News `eqn.news` public channels + global macro/crypto wires + exchange announcements).
 
-- `items[]`: `{ ts, cat_code, category, source, title, detail, impact, coins[], url }`
+- `items[]`: `{ ts, dt_bjt, cat_code, category, source, headline, body, impact_label, impact_tone, coins[], url }`
   - `cat_code`: `CRYPTO` | `MACRO` | `LISTING` | `MOVES` | `INTEL`

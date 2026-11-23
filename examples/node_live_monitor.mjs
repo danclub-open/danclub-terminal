@@ -21,7 +21,7 @@ const [overview, whales, feed] = await Promise.all([
 console.log("=== DanClub Terminal Live Snapshot ===");
 console.log("Generated:", overview.meta?.generated_at_bjt);
 console.log("Market Regime:", overview.market_regime?.label);
-console.log("BTC Whale Divergence:", whales.divergence?.BTC);
+console.log("BTC Whale Divergence:", whales.cohorts?.BTC?.divergence);
 
 const bstocks = (overview.macro_quotes || []).filter((q) => q.price_source === "BINANCE_BSTOCKS");
 if (bstocks.length) {
@@ -33,5 +33,5 @@ if (bstocks.length) {
 
 console.log("\nLatest 5 Market Wires:");
 (feed.items || []).slice(0, 5).forEach((it) => {
-  console.log(`  [${it.category}] (${it.source}) ${it.title}`);
+  console.log(`  [${it.category}] (${it.source}) ${it.headline}`);
 });
