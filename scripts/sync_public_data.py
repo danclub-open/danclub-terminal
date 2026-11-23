@@ -256,6 +256,7 @@ _MACRO_SOURCES = frozenset({
     "deitaone",
     "walter bloomberg",
     "fxhedge",
+    "unusual_whales",
 })
 _CRYPTO_EXPLICIT_RE = re.compile(
     r"(?:\b(?:BTC|ETH|SOL|BNB|XRP|HYPE|DOGE|USDT|USDC|RLUSD|BITCOIN|ETHEREUM|SOLANA|CRYPTO|DEFI|NFT|"
@@ -509,6 +510,21 @@ def merge_eqn_into_bundle(
     feed = bundle.get("feed")
     if isinstance(feed, dict) and eqn_feed:
         base_items = list(feed.get("items") or [])
+        # Re-check upstream wire items that defaulted to CRYPTO/INTEL when actually macro TradFi wires
+        for bi in base_items:
+            if not isinstance(bi, dict):
+                continue
+            hl = str(bi.get("headline") or "")
+            src_low = str(bi.get("source") or "").strip().lower()
+            cc = str(bi.get("cat_code") or "CRYPTO")
+            if cc == "CRYPTO" and not _CRYPTO_EXPLICIT_RE.search(hl):
+                if src_low in _MACRO_SOURCES or _MACRO_KEYWORD_RE.search(hl):
+                    bi["cat_code"] = "MACRO"
+                    bi["category"] = "美股·宏观"
+            elif cc == "INTEL" and src_low in _MACRO_SOURCES and not (_INTEL_SECURITY_RE.search(hl) or re.search(r"\bSEC\b", hl)):
+                if not _CRYPTO_EXPLICIT_RE.search(hl):
+                    bi["cat_code"] = "MACRO"
+                    bi["category"] = "美股·宏观"
         seen_keys: set[str] = {_norm_title_key(it.get("headline", "")) for it in base_items if isinstance(it, dict)}
         for it in eqn_feed:
             k = _norm_title_key(it.get("headline", ""))
